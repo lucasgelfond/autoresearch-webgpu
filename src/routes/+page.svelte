@@ -258,6 +258,13 @@
 				}
 				status = `#${record.id} ${record.kept ? 'KEPT' : 'discarded'} — bpb ${record.valBpb.toFixed(4)}`;
 			},
+			onCodeStream(streamedCode) {
+				code = streamedCode;
+			},
+			onReasoningStream(streamedReasoning) {
+				currentReasoning = streamedReasoning;
+				status = `thinking: ${streamedReasoning}`;
+			},
 			onError(error) {
 				status = `error: ${error}`;
 			}
@@ -303,23 +310,52 @@
 		selectExperimentById(exp.id);
 	}
 
+	async function loadModelForExperiment(expId: number): Promise<boolean> {
+		const exp = experiments.find(e => e.id === expId);
+		if (!exp) return false;
+
+		// If we already have this model loaded, skip
+		if (lastForwardFn && lastParams && currentExpDbId === expId) return true;
+
+		// Load saved weights
+		const savedParams = await loadWeights(expId);
+		if (!savedParams) return false;
+
+		// Re-execute the code with trainSeconds=0 to get the forward function
+		if (!trainLoader || !valLoader) return false;
+		const result = await executeTrainCode(exp.code, trainLoader, valLoader, 0, {
+			signal: new AbortController().signal,
+			onStep() {},
+		});
+
+		if (!result.forward || result.error) return false;
+
+		// Use the saved weights (not the freshly-initialized ones)
+		lastForwardFn = result.forward;
+		lastParams = savedParams;
+		lastVocabSize = result.vocabSize;
+		lastSeqLen = result.seqLen;
+		currentExpDbId = expId;
+		return true;
+	}
+
 	async function generateSample() {
 		if (sampling || !selectedExpId) return;
 		sampling = true;
 		try {
-			// For inference we need the forward function. If it's the current run, use in-memory.
-			// Otherwise we'd need to re-execute the code or load weights — for now, only current run works.
 			if (!lastForwardFn || !lastParams || currentExpDbId !== selectedExpId) {
-				// Try to load weights and re-run code to get forward fn
-				const exp = experiments.find(e => e.id === selectedExpId);
-				if (!exp) { sampling = false; return; }
-				// TODO: re-execute code to rebuild forward fn from saved weights
-				console.warn('Inference only works on the most recently trained model');
-				sampling = false;
-				return;
+				status = 'loading model...';
+				const loaded = await loadModelForExperiment(selectedExpId);
+				if (!loaded) {
+					console.error('Could not load model for experiment', selectedExpId);
+					sampling = false;
+					status = 'ready';
+					return;
+				}
+				status = 'ready';
 			}
 			streamingOutput = '';
-			const output = await sampleText(lastParams, lastForwardFn, lastVocabSize, lastSeqLen, prompt, 200, temperature, (text) => {
+			const output = await sampleText(lastParams!, lastForwardFn!, lastVocabSize, lastSeqLen, prompt, 200, temperature, (text) => {
 				streamingOutput = text;
 			});
 			await insertInference({ experimentId: selectedExpId, prompt, output, temperature });

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import { EditorView } from '@codemirror/view';
-	import { EditorState } from '@codemirror/state';
+	import { EditorState, Compartment } from '@codemirror/state';
 	import { javascript } from '@codemirror/lang-javascript';
 	import { basicSetup } from 'codemirror';
 	import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
@@ -12,8 +12,8 @@
 	let container: HTMLDivElement;
 	let view: EditorView;
 	let updating = false;
+	const readOnlyComp = new Compartment();
 
-	// Custom theme matching the app's dark background
 	const appTheme = EditorView.theme({
 		'&': { fontSize: '10.5px', height: '100%', background: 'transparent' },
 		'.cm-scroller': { overflow: 'auto', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' },
@@ -31,53 +31,50 @@
 	}, { dark: true });
 
 	const highlighting = HighlightStyle.define([
-		{ tag: tags.keyword, color: '#c084fc' },           // purple - const, let, function, for, if
+		{ tag: tags.keyword, color: '#c084fc' },
 		{ tag: tags.controlKeyword, color: '#c084fc' },
 		{ tag: tags.definitionKeyword, color: '#c084fc' },
 		{ tag: tags.operatorKeyword, color: '#c084fc' },
-		{ tag: tags.variableName, color: '#e2e8f0' },      // near-white
-		{ tag: tags.definition(tags.variableName), color: '#93c5fd' }, // blue - variable definitions
-		{ tag: tags.function(tags.variableName), color: '#67e8f9' },   // cyan - function calls
-		{ tag: tags.propertyName, color: '#6ee7b7' },       // green - property access
+		{ tag: tags.variableName, color: '#e2e8f0' },
+		{ tag: tags.definition(tags.variableName), color: '#93c5fd' },
+		{ tag: tags.function(tags.variableName), color: '#67e8f9' },
+		{ tag: tags.propertyName, color: '#6ee7b7' },
 		{ tag: tags.definition(tags.propertyName), color: '#6ee7b7' },
-		{ tag: tags.number, color: '#fbbf24' },             // amber - numbers
-		{ tag: tags.string, color: '#86efac' },             // light green - strings
+		{ tag: tags.number, color: '#fbbf24' },
+		{ tag: tags.string, color: '#86efac' },
 		{ tag: tags.bool, color: '#fbbf24' },
 		{ tag: tags.null, color: '#fbbf24' },
-		{ tag: tags.operator, color: '#94a3b8' },           // slate - operators
-		{ tag: tags.punctuation, color: '#64748b' },        // dim slate - brackets, semicolons
+		{ tag: tags.operator, color: '#94a3b8' },
+		{ tag: tags.punctuation, color: '#64748b' },
 		{ tag: tags.comment, color: '#475569', fontStyle: 'italic' },
 		{ tag: tags.lineComment, color: '#475569', fontStyle: 'italic' },
 		{ tag: tags.blockComment, color: '#475569', fontStyle: 'italic' },
-		{ tag: tags.typeName, color: '#f0abfc' },           // pink - types
+		{ tag: tags.typeName, color: '#f0abfc' },
 		{ tag: tags.atom, color: '#fbbf24' },
 	]);
-
-	function buildExtensions(readOnly: boolean) {
-		return [
-			basicSetup,
-			javascript(),
-			appTheme,
-			syntaxHighlighting(highlighting),
-			EditorState.readOnly.of(readOnly),
-			EditorView.updateListener.of((update) => {
-				if (update.docChanged && !updating) {
-					value = update.state.doc.toString();
-				}
-			}),
-		];
-	}
 
 	onMount(() => {
 		const state = EditorState.create({
 			doc: value,
-			extensions: buildExtensions(disabled),
+			extensions: [
+				basicSetup,
+				javascript(),
+				appTheme,
+				syntaxHighlighting(highlighting),
+				readOnlyComp.of(EditorState.readOnly.of(disabled)),
+				EditorView.updateListener.of((update) => {
+					if (update.docChanged && !updating) {
+						value = update.state.doc.toString();
+					}
+				}),
+			],
 		});
 		view = new EditorView({ state, parent: container });
 	});
 
 	onDestroy(() => view?.destroy());
 
+	// Sync value → editor
 	$effect(() => {
 		if (view && value !== view.state.doc.toString()) {
 			updating = true;
@@ -85,13 +82,17 @@
 				changes: { from: 0, to: view.state.doc.length, insert: value },
 			});
 			updating = false;
+			const scroller = view.scrollDOM;
+			scroller.scrollTop = scroller.scrollHeight;
+			scroller.scrollLeft = 0;
 		}
 	});
 
+	// Sync disabled → readOnly
 	$effect(() => {
 		if (view) {
 			view.dispatch({
-				effects: EditorState.reconfigure.of(buildExtensions(disabled)),
+				effects: readOnlyComp.reconfigure(EditorState.readOnly.of(disabled)),
 			});
 		}
 	});

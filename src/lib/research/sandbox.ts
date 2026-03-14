@@ -52,10 +52,11 @@ export async function executeTrainCode(
 			});
 		};
 
-		// Timeout: 2x the training budget
+		// Timeout: 2x the training budget (minimum 30s for model init/inference rebuild)
+		const timeoutMs = Math.max(trainSeconds * 2000, 30000);
 		const timeout = setTimeout(() => {
-			reject(new Error(`Training exceeded ${trainSeconds * 2}s timeout`));
-		}, trainSeconds * 2000);
+			reject(new Error(`Training exceeded ${timeoutMs / 1000}s timeout`));
+		}, timeoutMs);
 
 		try {
 			// Build the function body with all globals destructured

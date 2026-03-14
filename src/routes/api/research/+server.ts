@@ -7,7 +7,6 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 		return json({ error: 'API key not configured' }, { status: 500 });
 	}
 
-	// Cloudflare rate limiting
 	const rateLimiter = platform?.env?.RATE_LIMITER;
 	if (rateLimiter) {
 		const { success } = await rateLimiter.limit({ key: 'global' });
@@ -16,8 +15,46 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 		}
 	}
 
-	const { systemPrompt, userPrompt } = await request.json();
+	const { systemPrompt, userPrompt, stream } = await request.json();
 
+	const body: Record<string, unknown> = {
+		model: 'claude-sonnet-4-6',
+		max_tokens: 8192,
+		system: [
+			{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }
+		],
+		messages: [{ role: 'user', content: userPrompt }],
+	};
+
+	if (stream) {
+		body.stream = true;
+
+		const response = await fetch('https://api.anthropic.com/v1/messages', {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				'x-api-key': apiKey,
+				'anthropic-version': '2023-06-01',
+			},
+			body: JSON.stringify(body),
+		});
+
+		if (!response.ok) {
+			const error = await response.text();
+			return json({ error }, { status: response.status });
+		}
+
+		// Pass through the SSE stream from Anthropic
+		return new Response(response.body, {
+			headers: {
+				'Content-Type': 'text/event-stream',
+				'Cache-Control': 'no-cache',
+				'Connection': 'keep-alive',
+			},
+		});
+	}
+
+	// Non-streaming path (kept for backwards compat)
 	const response = await fetch('https://api.anthropic.com/v1/messages', {
 		method: 'POST',
 		headers: {
@@ -25,20 +62,7 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 			'x-api-key': apiKey,
 			'anthropic-version': '2023-06-01',
 		},
-		body: JSON.stringify({
-			model: 'claude-sonnet-4-6',
-			max_tokens: 8192,
-			// Prompt caching: system prompt is large (API reference) and stable across calls.
-			// Using cache_control on the system block tells Anthropic to cache it.
-			system: [
-				{
-					type: 'text',
-					text: systemPrompt,
-					cache_control: { type: 'ephemeral' }
-				}
-			],
-			messages: [{ role: 'user', content: userPrompt }]
-		})
+		body: JSON.stringify(body),
 	});
 
 	if (!response.ok) {
@@ -49,19 +73,11 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 	const data = await response.json();
 	const text = data.content[0].text;
 
-	// Try to parse the JSON response. Claude should return { reasoning, code }.
-	// The code field contains braces, so we can't use a simple regex.
-	// Strategy: try JSON.parse on the full text first, then look for JSON block.
 	try {
 		const parsed = JSON.parse(text);
-		if (parsed.code && parsed.reasoning) {
-			return json(parsed);
-		}
-	} catch {
-		// Not direct JSON, try extracting from markdown fences or finding the JSON object
-	}
+		if (parsed.code && parsed.reasoning) return json(parsed);
+	} catch {}
 
-	// Try to find JSON between ```json ... ``` or ``` ... ```
 	const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
 	if (fenceMatch) {
 		try {
@@ -70,18 +86,13 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 		} catch {}
 	}
 
-	// Last resort: find the outermost { ... } but be smarter about nested braces
 	try {
 		const start = text.indexOf('{');
 		if (start >= 0) {
-			let depth = 0;
-			let end = start;
+			let depth = 0, end = start;
 			for (let i = start; i < text.length; i++) {
 				if (text[i] === '{') depth++;
-				else if (text[i] === '}') {
-					depth--;
-					if (depth === 0) { end = i; break; }
-				}
+				else if (text[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
 			}
 			const parsed = JSON.parse(text.slice(start, end + 1));
 			if (parsed.code) return json(parsed);

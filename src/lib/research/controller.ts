@@ -12,6 +12,8 @@ export type ResearchCallbacks = {
 	onStep?: (metrics: StepMetrics) => void;
 	onExperimentDone?: (record: ExperimentRecord) => void;
 	onError?: (error: string) => void;
+	onCodeStream?: (text: string) => void;
+	onReasoningStream?: (text: string) => void;
 };
 
 export class ResearchController {
@@ -43,7 +45,6 @@ export class ResearchController {
 		this.running = true;
 		this.stopRequested = false;
 
-		// Run baseline if no history
 		if (this.history.length === 0) {
 			await this.runExperiment(
 				this.bestCode,
@@ -53,7 +54,7 @@ export class ResearchController {
 		}
 
 		while (!this.stopRequested) {
-			const proposal = await this.getNextCode();
+			const proposal = await this.getNextCode(callbacks);
 			if (!proposal) {
 				callbacks.onError?.(this.lastError || 'Failed to get next code from Claude.');
 				break;
@@ -111,7 +112,6 @@ export class ResearchController {
 
 		await insertLossCurve(dbId, lossCurve);
 
-		// Save weights in background
 		if (result.params && Object.keys(result.params).length > 0) {
 			(async () => {
 				try {
@@ -139,7 +139,7 @@ export class ResearchController {
 		callbacks.onExperimentDone?.(record);
 	}
 
-	private async getNextCode(): Promise<{ code: string; reasoning: string } | null> {
+	private async getNextCode(callbacks: ResearchCallbacks): Promise<{ code: string; reasoning: string } | null> {
 		const systemPrompt = buildSystemPrompt();
 		const userPrompt = buildUserPrompt(this.history, this.bestCode, this.bestBpb);
 
@@ -148,7 +148,7 @@ export class ResearchController {
 			const response = await fetch('/api/research', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ systemPrompt, userPrompt }),
+				body: JSON.stringify({ systemPrompt, userPrompt, stream: true }),
 				signal: this.fetchAbort.signal
 			});
 
@@ -158,21 +158,14 @@ export class ResearchController {
 				return null;
 			}
 
-			const data = await response.json();
-			if (data.error) {
-				this.lastError = `API error: ${data.error}`;
+			// Parse SSE stream from Anthropic
+			const fullText = await this.consumeStream(response, callbacks);
+			if (!fullText) {
+				this.lastError = 'Empty response from Claude';
 				return null;
 			}
 
-			if (!data.code || typeof data.code !== 'string') {
-				this.lastError = 'No code in API response';
-				return null;
-			}
-
-			return {
-				code: data.code,
-				reasoning: data.reasoning || 'No reasoning provided.'
-			};
+			return this.parseResponse(fullText);
 		} catch (e) {
 			if (this.stopRequested) return null;
 			this.lastError = `Fetch failed: ${e}`;
@@ -180,5 +173,127 @@ export class ResearchController {
 		} finally {
 			this.fetchAbort = null;
 		}
+	}
+
+	private async consumeStream(response: Response, callbacks: ResearchCallbacks): Promise<string> {
+		const reader = response.body!.getReader();
+		const decoder = new TextDecoder();
+		let fullText = '';
+		let buffer = '';
+
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+
+			buffer += decoder.decode(value, { stream: true });
+			const lines = buffer.split('\n');
+			buffer = lines.pop() || '';
+
+			for (const line of lines) {
+				if (!line.startsWith('data: ')) continue;
+				const data = line.slice(6);
+				if (data === '[DONE]') continue;
+
+				try {
+					const event = JSON.parse(data);
+					if (event.type === 'content_block_delta' && event.delta?.text) {
+						const chunk = event.delta.text;
+						fullText += chunk;
+
+						// Try to extract streaming code from the partial JSON
+						const extracted = this.extractStreamingCode(fullText);
+						if (extracted.code) {
+							callbacks.onCodeStream?.(extracted.code);
+						}
+						if (extracted.reasoning) {
+							callbacks.onReasoningStream?.(extracted.reasoning);
+						}
+					}
+				} catch {}
+			}
+		}
+
+		return fullText;
+	}
+
+	/** Try to extract code and reasoning from partial JSON as it streams in. */
+	private extractStreamingCode(partial: string): { code?: string; reasoning?: string } {
+		const result: { code?: string; reasoning?: string } = {};
+
+		// Try to find reasoning field
+		const reasoningMatch = partial.match(/"reasoning"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+		if (reasoningMatch) {
+			try { result.reasoning = JSON.parse('"' + reasoningMatch[1] + '"'); } catch {}
+		}
+
+		// Try to find code field — it may be incomplete
+		const codeStart = partial.indexOf('"code"');
+		if (codeStart === -1) return result;
+
+		// Find the opening quote of the code value
+		const colonAfterCode = partial.indexOf(':', codeStart + 6);
+		if (colonAfterCode === -1) return result;
+
+		const quoteStart = partial.indexOf('"', colonAfterCode);
+		if (quoteStart === -1) return result;
+
+		// Extract the code value, handling escaped characters
+		// Walk through the string handling escapes
+		let code = '';
+		let i = quoteStart + 1;
+		while (i < partial.length) {
+			if (partial[i] === '\\' && i + 1 < partial.length) {
+				const next = partial[i + 1];
+				if (next === '"') { code += '"'; i += 2; }
+				else if (next === '\\') { code += '\\'; i += 2; }
+				else if (next === 'n') { code += '\n'; i += 2; }
+				else if (next === 't') { code += '\t'; i += 2; }
+				else if (next === 'r') { code += '\r'; i += 2; }
+				else { code += partial[i]; i++; }
+			} else if (partial[i] === '"') {
+				// End of string
+				break;
+			} else {
+				code += partial[i];
+				i++;
+			}
+		}
+
+		if (code.length > 0) {
+			result.code = code;
+		}
+
+		return result;
+	}
+
+	private parseResponse(text: string): { code: string; reasoning: string } | null {
+		try {
+			const parsed = JSON.parse(text);
+			if (parsed.code && parsed.reasoning) return parsed;
+		} catch {}
+
+		const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+		if (fenceMatch) {
+			try {
+				const parsed = JSON.parse(fenceMatch[1].trim());
+				if (parsed.code) return { code: parsed.code, reasoning: parsed.reasoning || '' };
+			} catch {}
+		}
+
+		try {
+			const start = text.indexOf('{');
+			if (start >= 0) {
+				let depth = 0, end = start;
+				for (let i = start; i < text.length; i++) {
+					if (text[i] === '{') depth++;
+					else if (text[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+				}
+				const parsed = JSON.parse(text.slice(start, end + 1));
+				if (parsed.code) return { code: parsed.code, reasoning: parsed.reasoning || '' };
+			}
+		} catch {}
+
+		this.lastError = 'Could not parse Claude response';
+		return null;
 	}
 }
