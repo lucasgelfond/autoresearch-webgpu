@@ -9,6 +9,7 @@ export async function getDb(): Promise<PGlite> {
 		CREATE TABLE IF NOT EXISTS experiments (
 			id SERIAL PRIMARY KEY,
 			name TEXT NOT NULL DEFAULT '',
+			source TEXT NOT NULL DEFAULT 'manual',
 			config JSONB NOT NULL,
 			val_bpb REAL NOT NULL,
 			elapsed REAL NOT NULL,
@@ -46,6 +47,7 @@ export async function getDb(): Promise<PGlite> {
 export type ExperimentRow = {
 	id: number;
 	name: string;
+	source: 'manual' | 'auto';
 	config: Record<string, unknown>;
 	val_bpb: number;
 	elapsed: number;
@@ -59,6 +61,7 @@ export type ExperimentRow = {
 
 export async function insertExperiment(exp: {
 	name?: string;
+	source?: 'manual' | 'auto';
 	config: Record<string, unknown>;
 	valBpb: number;
 	elapsed: number;
@@ -69,11 +72,12 @@ export async function insertExperiment(exp: {
 }): Promise<number> {
 	const pg = await getDb();
 	const result = await pg.query<{ id: number }>(
-		`INSERT INTO experiments (name, config, val_bpb, elapsed, total_steps, reasoning, kept, loss_curve)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		`INSERT INTO experiments (name, source, config, val_bpb, elapsed, total_steps, reasoning, kept, loss_curve)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		 RETURNING id`,
 		[
 			exp.name || '',
+			exp.source || 'manual',
 			JSON.stringify(exp.config),
 			exp.valBpb,
 			exp.elapsed,

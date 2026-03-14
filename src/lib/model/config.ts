@@ -42,7 +42,7 @@ export const DEFAULT_CONFIG: ExperimentConfig = {
 	batchSize: 8,
 	seqLen: 128,
 
-	trainSeconds: 15,
+	trainSeconds: 30,
 
 	vocabSize: 256
 };

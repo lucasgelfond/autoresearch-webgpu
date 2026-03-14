@@ -9,12 +9,14 @@ export async function saveWeights(experimentId: number, params: Params): Promise
 	const metaPath = `weights/exp-${experimentId}.meta.json`;
 
 	const metas: ParamMeta[] = [];
+	const buffers: Uint8Array[] = [];
 	let totalBytes = 0;
 
-	// First pass: compute sizes
+	// Single pass: extract data and compute layout
 	for (const key of Object.keys(params)) {
 		const arr = params[key];
 		const data = await arr.ref.data();
+		const bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
 		metas.push({
 			key,
 			shape: arr.ref.shape,
@@ -22,14 +24,14 @@ export async function saveWeights(experimentId: number, params: Params): Promise
 			offset: totalBytes,
 			byteLength: data.byteLength
 		});
+		buffers.push(bytes);
 		totalBytes += data.byteLength;
 	}
 
-	// Second pass: pack into single buffer
+	// Pack into single buffer
 	const buffer = new Uint8Array(totalBytes);
-	for (const meta of metas) {
-		const data = await params[meta.key].ref.data();
-		buffer.set(new Uint8Array(data.buffer, data.byteOffset, data.byteLength), meta.offset);
+	for (let i = 0; i < buffers.length; i++) {
+		buffer.set(buffers[i], metas[i].offset);
 	}
 
 	await opfs.write(path, buffer);

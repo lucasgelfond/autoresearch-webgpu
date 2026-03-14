@@ -18,9 +18,12 @@
 	{#each sorted as exp, i}
 		<button
 			onclick={() => onSelect?.(exp)}
-			class="w-full flex items-center justify-between gap-2 font-mono text-xs px-2 py-1.5 rounded transition-colors
+			class="w-full flex items-center gap-2 font-mono text-xs px-2 py-1.5 rounded transition-colors
 				{selected?.id === exp.id ? 'bg-blue-950/50 text-blue-300' : i === 0 ? 'bg-green-950/50 text-green-300' : 'text-gray-400 hover:bg-gray-800'}"
 		>
+			<span class="shrink-0 w-3 text-center {exp.source === 'auto' ? 'text-blue-400' : 'text-gray-500'}" title={exp.source === 'auto' ? 'auto (Claude)' : 'manual'}>
+				{exp.source === 'auto' ? 'A' : 'M'}
+			</span>
 			<span class="truncate text-left flex-1" title={exp.reasoning}>
 				{exp.name || `#${exp.id}`}
 			</span>

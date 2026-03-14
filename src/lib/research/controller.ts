@@ -94,6 +94,7 @@ export class ResearchController {
 		const expName = `Research #${this.history.length + 1}`;
 		const dbId = await insertExperiment({
 			name: expName,
+			source: 'auto',
 			config,
 			valBpb: result.valBpb,
 			elapsed: result.elapsed,
@@ -125,6 +126,7 @@ export class ResearchController {
 		const record: ExperimentRecord = {
 			id: dbId,
 			name: expName,
+			source: 'auto',
 			config,
 			valBpb: result.valBpb,
 			elapsed: result.elapsed,

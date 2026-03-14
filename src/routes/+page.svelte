@@ -86,6 +86,7 @@
 		return {
 			id: row.id,
 			name: row.name,
+			source: row.source,
 			config: row.config as ExperimentConfig,
 			valBpb: row.val_bpb,
 			elapsed: row.elapsed,
@@ -126,6 +127,7 @@
 
 		const dbId = await insertExperiment({
 			name: experimentName || `Run ${experiments.length + 1}`,
+			source: 'manual',
 			config: runConfig,
 			valBpb: r.valBpb,
 			elapsed: r.elapsed,
@@ -140,23 +142,20 @@
 		// Save loss curve to normalized table
 		await insertLossCurve(dbId, lossCurve);
 
-		// Save weights to OPFS, update DB with path
-		status = 'saving weights...';
-		try {
-			const weightsPath = await saveWeights(dbId, r.params);
-			await updateWeightsPath(dbId, weightsPath);
-		} catch (e) {
-			console.error('Failed to save weights:', e);
-		}
-
 		// Update leaderboard immediately
 		await loadFromDb();
 		await selectExperimentById(dbId);
 		status = `done — val_bpb: ${r.valBpb.toFixed(4)} | ${r.totalSteps} steps`;
 		running = false;
 
-		// Generate sample in background (non-blocking)
+		// Save weights + generate sample in background (non-blocking)
 		(async () => {
+			try {
+				const weightsPath = await saveWeights(dbId, r.params);
+				await updateWeightsPath(dbId, weightsPath);
+			} catch (e) {
+				console.error('Failed to save weights:', e);
+			}
 			try {
 				const sampleOutput = await sampleText(r.params, runConfig, '', 200, 0.8);
 				await insertInference({ experimentId: dbId, prompt: '', output: sampleOutput, temperature: 0.8 });
@@ -272,6 +271,7 @@
 	}
 
 	let currentInference = $derived(inferences.length > 0 ? inferences[inferenceIdx] : null);
+	let selectedExp = $derived(selectedExpId ? experiments.find(e => e.id === selectedExpId) ?? null : null);
 </script>
 
 <svelte:head>
@@ -369,7 +369,20 @@
 			<!-- Center: chart + status + inference (all in one panel) -->
 			<div class="space-y-4">
 				<div class="rounded border border-gray-800 p-4 space-y-4">
-					<h2 class="text-sm font-mono text-gray-400">loss</h2>
+					{#if selectedExp}
+						<div class="flex items-center gap-2 font-mono text-sm">
+							<span class="px-1.5 py-0.5 rounded text-xs {selectedExp.source === 'auto' ? 'bg-blue-900/50 text-blue-300' : 'bg-gray-700 text-gray-300'}">
+								{selectedExp.source === 'auto' ? 'auto' : 'manual'}
+							</span>
+							<span class="text-gray-200">{selectedExp.name}</span>
+							<span class="text-gray-500 tabular-nums ml-auto">{selectedExp.valBpb.toFixed(4)} bpb</span>
+						</div>
+						{#if selectedExp.reasoning && selectedExp.reasoning !== selectedExp.name}
+							<p class="text-xs text-gray-400 font-mono">{selectedExp.reasoning}</p>
+						{/if}
+					{:else}
+						<h2 class="text-sm font-mono text-gray-400">loss</h2>
+					{/if}
 					<div class="h-48">
 						<LossChart data={lossData} pastRuns={pastLossRuns} />
 					</div>
