@@ -10,7 +10,3 @@ There's noting else particularly crazy about this repo - it's a standard Svelte 
 ![demo](static/demo.gif)
 
 Try the live demo at [autoresearch.lucasgelfond.online](https://autoresearch.lucasgelfond.online)
-
-## License
-
-MIT. See [LICENSE](LICENSE).
