@@ -32,7 +32,7 @@
 	let currentReasoning = $state('');
 	let experimentName = $state('');
 	let experimentDesc = $state('');
-	let listMode = $state<'leaderboard' | 'log'>('leaderboard');
+	let listMode = $state<'leaderboard' | 'current'>('leaderboard');
 
 	// Inference state
 	let prompt = $state('');
@@ -44,6 +44,12 @@
 	let viewingLiveRun = $state(true);
 	let currentRunName = $state('');
 	let trainAbort: AbortController | null = null;
+	let inProgressExp = $state<ExperimentRecord | null>(null);
+	let waitingForRecommendation = $state(false);
+
+	let allExperiments = $derived(
+		inProgressExp ? [...experiments, inProgressExp] : experiments
+	);
 
 	let pastLossRuns = $derived(
 		experiments
@@ -78,7 +84,7 @@
 				if (exp) selectExperiment(exp);
 			}
 			const viewParam = params.get('view');
-			if (viewParam === 'log' || viewParam === 'leaderboard') listMode = viewParam;
+			if (viewParam === 'current' || viewParam === 'leaderboard') listMode = viewParam;
 			status = 'ready';
 		}
 	});
@@ -122,11 +128,27 @@
 		inferences = [];
 		inferenceIdx = 0;
 		status = 'training...';
+		currentRunName = experimentName || `Run ${experiments.length + 1}`;
+		currentReasoning = experimentDesc || '';
 		trainLoader.reset();
 		trainAbort = new AbortController();
+		setListMode('current');
 
 		const runConfig = { ...config };
 		const lossCurve: { step: number; loss: number }[] = [];
+
+		// Create in-progress experiment for leaderboard
+		inProgressExp = {
+			id: -1,
+			name: currentRunName,
+			source: 'manual',
+			config: runConfig,
+			valBpb: Infinity,
+			elapsed: 0,
+			totalSteps: 0,
+			reasoning: currentReasoning,
+			kept: false,
+		};
 
 		const r = await trainRun(runConfig, trainLoader, valLoader, {
 			signal: trainAbort.signal,
@@ -134,6 +156,10 @@
 				lossData = [...lossData, { step: m.step, loss: m.loss }];
 				lossCurve.push({ step: m.step, loss: m.loss });
 				status = `step ${m.step} | loss ${m.loss.toFixed(4)} | ${(m.elapsed / 1000).toFixed(1)}s`;
+				// Update in-progress experiment with latest loss
+				if (inProgressExp) {
+					inProgressExp = { ...inProgressExp, valBpb: m.loss, totalSteps: m.step, elapsed: m.elapsed };
+				}
 			},
 			onDone(r: RunResult) {
 				result = r;
@@ -141,6 +167,7 @@
 			}
 		});
 		trainAbort = null;
+		inProgressExp = null;
 
 		const kept = experiments.length === 0 || r.valBpb < Math.min(...experiments.map(e => e.valBpb));
 
@@ -192,6 +219,7 @@
 		running = true;
 		controller = new ResearchController();
 		controller.constraints = constraints;
+		setListMode('current');
 
 		const best = await getBestExperiment();
 		if (best) {
@@ -204,7 +232,10 @@
 			onExperimentStart(cfg, reasoning) {
 				lossData = [];
 				currentReasoning = reasoning;
+				currentRunName = `Research #${(controller?.history.length ?? 0) + 1}`;
 				status = `experiment: ${reasoning}`;
+				// If viewing current run, clear selection so live data shows
+				if (listMode === 'current') setSelectedExp(null);
 			},
 			onStep(m: StepMetrics) {
 				lossData = [...lossData, { step: m.step, loss: m.loss }];
@@ -245,8 +276,12 @@
 		history.replaceState(null, '', url);
 	}
 
-	function setListMode(m: 'leaderboard' | 'log') {
+	function setListMode(m: 'leaderboard' | 'current') {
 		listMode = m;
+		if (m === 'current') {
+			// Clear selected experiment to show the live run
+			setSelectedExp(null);
+		}
 		const url = new URL(window.location.href);
 		url.searchParams.set('view', m);
 		history.replaceState(null, '', url);
@@ -357,7 +392,7 @@
 	<title>autoresearch-webgpu</title>
 </svelte:head>
 
-<main class="px-6 py-4 max-w-6xl mx-auto space-y-4">
+<main class="px-6 py-6 max-w-6xl mx-auto space-y-5">
 	{#if gpuStatus === null}
 		<p class="text-gray-400 font-mono text-sm">initializing webgpu...</p>
 	{:else if !gpuStatus.ok}
@@ -368,7 +403,7 @@
 		<div class="max-w-[50%]">
 			<h1 class="text-lg font-mono text-gray-200">autoresearch-webgpu</h1>
 			<p class="text-xs font-mono text-gray-500">
-				Based on Andrej Karpathy's <a href="https://github.com/karpathy/autoresearch" class="underline hover:text-gray-300">autoresearch</a> and built on Eric Zhang's <a href="https://github.com/ekzhang/jax-js" class="underline hover:text-gray-300">jax-js</a>. Built by <a href="https://lucasgelfond.online" class="underline hover:text-gray-300">Lucas Gelfond</a>, in New York, with love.
+				Based on Andrej Karpathy's <a href="https://github.com/karpathy/autoresearch" class="underline hover:text-gray-300">autoresearch</a> and built on Eric Zhang's <a href="https://github.com/ekzhang/jax-js" class="underline hover:text-gray-300">jax-js</a>. Built by <a href="https://lucasgelfond.online" class="underline hover:text-gray-300">Lucas Gelfond</a>. Source <a href="https://github.com/lucasgelfond/autoresearch-webgpu" class="underline hover:text-gray-300">here</a>.
 			</p>
 		</div>
 		<div class="flex items-center gap-3">
@@ -399,12 +434,12 @@
 			</button>
 		</div>
 
-		<div class="grid grid-cols-[240px_1fr_240px] gap-4 h-[calc(100vh-11rem)]">
+		<div class="grid grid-cols-[240px_1fr_240px] gap-4 h-[calc(100vh-13rem)]">
 			<!-- Left: config + controls -->
 			<div class="space-y-2 overflow-y-auto h-full">
 				<div class="rounded border border-gray-800 p-3">
 					<h2 class="text-xs font-mono text-gray-400 mb-2">config</h2>
-					<ConfigEditor bind:config disabled={running || viewingExisting} {constraints} />
+					<ConfigEditor bind:config disabled={running} {constraints} />
 				</div>
 
 				{#if paramCapExceeded}
@@ -414,44 +449,35 @@
 				{/if}
 
 				{#if mode === 'manual'}
-					{#if viewingExisting && selectedExp}
+					<input
+						type="text"
+						bind:value={experimentName}
+						placeholder="experiment name..."
+						disabled={running}
+						class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 font-mono text-xs text-gray-200 placeholder-gray-500 disabled:opacity-40"
+					/>
+					<textarea
+						bind:value={experimentDesc}
+						placeholder="description / hypothesis..."
+						disabled={running}
+						rows={2}
+						class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 font-mono text-[11px] text-gray-200 placeholder-gray-500 disabled:opacity-40 resize-none"
+					></textarea>
+					{#if running}
 						<button
-							onclick={forkFromSelected}
-							class="w-full rounded bg-gray-700 hover:bg-gray-600 px-3 py-2 font-mono text-xs text-gray-200 transition-colors"
+							onclick={stopCurrentRun}
+							class="w-full rounded bg-red-600 hover:bg-red-500 px-3 py-1.5 font-mono text-xs transition-colors"
 						>
-							create new config from existing
+							stop training
 						</button>
 					{:else}
-						<input
-							type="text"
-							bind:value={experimentName}
-							placeholder="experiment name..."
-							disabled={running}
-							class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 font-mono text-xs text-gray-200 placeholder-gray-500 disabled:opacity-40"
-						/>
-						<textarea
-							bind:value={experimentDesc}
-							placeholder="description / hypothesis..."
-							disabled={running}
-							rows={2}
-							class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 font-mono text-[11px] text-gray-200 placeholder-gray-500 disabled:opacity-40 resize-none"
-						></textarea>
-						{#if running}
-							<button
-								onclick={stopCurrentRun}
-								class="w-full rounded bg-red-600 hover:bg-red-500 px-3 py-1.5 font-mono text-xs transition-colors"
-							>
-								stop training
-							</button>
-						{:else}
-							<button
-								onclick={startManualTraining}
-								disabled={status === 'loading data...' || paramCapExceeded}
-								class="w-full rounded bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 px-3 py-1.5 font-mono text-xs transition-colors"
-							>
-								start training
-							</button>
-						{/if}
+						<button
+							onclick={startManualTraining}
+							disabled={status === 'loading data...' || paramCapExceeded}
+							class="w-full rounded bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 px-3 py-1.5 font-mono text-xs transition-colors"
+						>
+							start training
+						</button>
 					{/if}
 				{:else}
 					{#if !running}
@@ -498,10 +524,19 @@
 						{#if selectedExp.reasoning && selectedExp.reasoning !== selectedExp.name}
 							<p class="text-[11px] text-gray-400 font-mono line-clamp-2" title={selectedExp.reasoning}>{selectedExp.reasoning}</p>
 						{/if}
+					{:else if running}
+						<div class="flex items-center gap-2 font-mono text-xs">
+							<span class="px-1 py-0.5 rounded text-[10px] bg-yellow-900/50 text-yellow-300 animate-pulse">running</span>
+							<span class="text-gray-200">{currentRunName || 'training...'}</span>
+						</div>
+						{#if currentReasoning}
+							<p class="text-[11px] text-gray-400 font-mono line-clamp-2" title={currentReasoning}>{currentReasoning}</p>
+						{/if}
+						<p class="text-[11px] text-gray-500 font-mono">{status}</p>
 					{:else}
 						<h2 class="text-xs font-mono text-gray-400">loss</h2>
 					{/if}
-					<div class="h-56">
+					<div class="h-44">
 						<LossChart data={lossData} pastRuns={pastLossRuns} />
 					</div>
 
@@ -577,9 +612,9 @@
 							>leaderboard</button>
 							<span class="text-gray-600">/</span>
 							<button
-								class="{listMode === 'log' ? 'text-gray-200' : 'text-gray-500 hover:text-gray-300'}"
-								onclick={() => setListMode('log')}
-							>log</button>
+								class="{listMode === 'current' ? 'text-gray-200' : 'text-gray-500 hover:text-gray-300'}"
+								onclick={() => setListMode('current')}
+							>history</button>
 						</div>
 						<span class="text-gray-500 text-[10px] font-mono">{experiments.length}</span>
 					</div>
