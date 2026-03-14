@@ -280,12 +280,9 @@
 		running = false;
 	}
 
-	function stopResearch() {
-		controller?.stop();
-	}
-
 	function stopCurrentRun() {
 		trainAbort?.abort();
+		controller?.stop();
 		controller?.stopCurrentRun();
 	}
 
@@ -513,20 +510,12 @@
 							start research
 						</button>
 					{:else}
-						<div class="space-y-1.5">
-							<button
-								onclick={stopCurrentRun}
-								class="w-full rounded bg-red-600 hover:bg-red-500 px-3 py-1.5 font-mono text-xs transition-colors"
-							>
-								stop current run
-							</button>
-							<button
-								onclick={stopResearch}
-								class="w-full rounded bg-gray-700 hover:bg-gray-600 px-3 py-1.5 font-mono text-xs text-gray-200 transition-colors"
-							>
-								stop after current run
-							</button>
-						</div>
+						<button
+							onclick={stopCurrentRun}
+							class="w-full rounded bg-red-600 hover:bg-red-500 px-3 py-1.5 font-mono text-xs transition-colors"
+						>
+							stop
+						</button>
 					{/if}
 				{/if}
 			</div>
@@ -594,6 +583,7 @@
 								onclick={generateSample}
 								disabled={!selectedExpId || sampling}
 								class="rounded bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 px-2 py-1 font-mono text-xs transition-colors"
+								title={!selectedExpId ? 'train a model to run inference' : ''}
 							>
 								{sampling ? '...' : 'go'}
 							</button>
@@ -621,8 +611,6 @@
 								{/if}
 							</div>
 							<pre class="text-xs text-gray-300 whitespace-pre-wrap break-all font-mono leading-relaxed max-h-48 overflow-y-auto">{currentInference.output}</pre>
-						{:else if !selectedExpId}
-							<p class="text-gray-500 text-xs font-mono">train a model to generate text</p>
 						{/if}
 					</div>
 				</div>
