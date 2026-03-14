@@ -26,6 +26,14 @@
 	let currentReasoning = $state('');
 	let prompt = $state('');
 	let temperature = $state(0.8);
+	let pastLossRuns = $derived(
+		experiments
+			.filter(e => e.lossCurve && e.lossCurve.length > 1)
+			.map(e => ({
+				data: e.lossCurve!,
+				color: e.kept ? '#22c55e' : '#6b7280'
+			}))
+	);
 
 	let trainLoader: DataLoader | null = null;
 	let valLoader: DataLoader | null = null;
@@ -62,6 +70,7 @@
 		result = null;
 		sample = '';
 		status = 'training...';
+		trainLoader.reset();
 
 		const r = await trainRun(config, trainLoader, valLoader, {
 			onStep(m: StepMetrics) {
@@ -230,7 +239,7 @@
 				<div class="rounded border border-gray-800 p-4">
 					<h2 class="text-sm font-mono text-gray-400 mb-2">loss</h2>
 					<div class="h-48">
-						<LossChart data={lossData} />
+						<LossChart data={lossData} pastRuns={pastLossRuns} />
 					</div>
 				</div>
 

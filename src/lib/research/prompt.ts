@@ -8,6 +8,8 @@ export type ExperimentRecord = {
 	totalSteps: number;
 	reasoning: string;
 	kept: boolean;
+	sampleText?: string;
+	lossCurve?: { step: number; loss: number }[];
 };
 
 export function buildSystemPrompt(): string {
@@ -37,13 +39,13 @@ You control these parameters via a JSON config:
 - cooldownRatio (0 to 0.5): fraction of training for LR cooldown
 - batchSize (4-32): batch size
 - seqLen (64-256): sequence length
-- trainSeconds (30-90): wall-clock training budget
+- trainSeconds (10-60): wall-clock training budget
 
 Constraints:
 - Total params should stay under ~3M (WebGPU memory limits)
 - Training runs for trainSeconds wall-clock, so bigger models = fewer steps
 - The dataset is ~1MB of Shakespeare text (byte-level)
-- Each experiment takes 30-90 seconds real time
+- Each experiment takes 10-60 seconds real time
 
 Strategy tips:
 - Start with small changes to understand what matters

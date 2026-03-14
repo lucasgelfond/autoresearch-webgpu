@@ -2,6 +2,7 @@ import type { ExperimentConfig } from '../model/config';
 import { DEFAULT_CONFIG } from '../model/config';
 import { DataLoader } from '../data/loader';
 import { trainRun, type StepMetrics, type RunResult } from '../train/loop';
+import { sampleText } from '../sample';
 import { buildSystemPrompt, buildUserPrompt, type ExperimentRecord } from './prompt';
 
 export type ResearchCallbacks = {
@@ -76,8 +77,13 @@ export class ResearchController {
 		const id = this.nextId++;
 		callbacks.onExperimentStart?.(id, config, reasoning);
 
+		trainData.reset();
+		const lossCurve: { step: number; loss: number }[] = [];
 		const result = await trainRun(config, trainData, valData, {
-			onStep: callbacks.onStep
+			onStep(m) {
+				lossCurve.push({ step: m.step, loss: m.loss });
+				callbacks.onStep?.(m);
+			}
 		});
 
 		const kept = result.valBpb < this.bestBpb;
@@ -86,6 +92,11 @@ export class ResearchController {
 			this.bestConfig = { ...config };
 		}
 
+		let generatedSample = '';
+		try {
+			generatedSample = await sampleText(result.params, config, '', 200, 0.8);
+		} catch (_) {}
+
 		const record: ExperimentRecord = {
 			id,
 			config,
@@ -93,7 +104,9 @@ export class ResearchController {
 			elapsed: result.elapsed,
 			totalSteps: result.totalSteps,
 			reasoning,
-			kept
+			kept,
+			sampleText: generatedSample,
+			lossCurve
 		};
 
 		this.history.push(record);
