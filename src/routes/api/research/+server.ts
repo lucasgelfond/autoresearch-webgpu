@@ -1,40 +1,19 @@
 import { json } from '@sveltejs/kit';
-import { env } from '$env/dynamic/private';
+import type { RequestHandler } from './$types';
 
-// Simple in-memory rate limiter: max 10 requests per IP per minute
-const requests = new Map<string, number[]>();
-const MAX_REQUESTS = 10;
-const WINDOW_MS = 60_000;
-
-function rateLimit(ip: string): boolean {
-	const now = Date.now();
-	const timestamps = requests.get(ip) ?? [];
-	const recent = timestamps.filter((t) => now - t < WINDOW_MS);
-
-	if (recent.length >= MAX_REQUESTS) {
-		requests.set(ip, recent);
-		return false;
+export const POST: RequestHandler = async ({ request, platform }) => {
+	const apiKey = platform?.env?.ANTHROPIC_API_KEY;
+	if (!apiKey) {
+		return json({ error: 'API key not configured' }, { status: 500 });
 	}
 
-	recent.push(now);
-	requests.set(ip, recent);
-	return true;
-}
-
-// Clean up stale entries every 5 minutes
-setInterval(() => {
-	const now = Date.now();
-	for (const [ip, timestamps] of requests) {
-		const recent = timestamps.filter((t) => now - t < WINDOW_MS);
-		if (recent.length === 0) requests.delete(ip);
-		else requests.set(ip, recent);
-	}
-}, 300_000);
-
-export const POST = async ({ request, getClientAddress }: { request: Request; getClientAddress: () => string }) => {
-	const ip = getClientAddress();
-	if (!rateLimit(ip)) {
-		return json({ error: 'Rate limited. Max 10 requests per minute.' }, { status: 429 });
+	// Cloudflare rate limiting
+	const rateLimiter = platform?.env?.RATE_LIMITER;
+	if (rateLimiter) {
+		const { success } = await rateLimiter.limit({ key: 'global' });
+		if (!success) {
+			return json({ error: 'Rate limited. Max 1 request every 10 seconds.' }, { status: 429 });
+		}
 	}
 
 	const { systemPrompt, userPrompt } = await request.json();
@@ -43,7 +22,7 @@ export const POST = async ({ request, getClientAddress }: { request: Request; ge
 		method: 'POST',
 		headers: {
 			'Content-Type': 'application/json',
-			'x-api-key': env.ANTHROPIC_API_KEY ?? '',
+			'x-api-key': apiKey,
 			'anthropic-version': '2023-06-01'
 		},
 		body: JSON.stringify({

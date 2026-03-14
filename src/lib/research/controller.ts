@@ -3,6 +3,7 @@ import { DEFAULT_CONFIG } from '../model/config';
 import { DataLoader } from '../data/loader';
 import { trainRun, type StepMetrics, type RunResult } from '../train/loop';
 import { sampleText } from '../sample';
+import { petname } from '../petname';
 import { insertExperiment, insertInference, insertLossCurve, updateWeightsPath } from '../db';
 import { saveWeights } from '../weights';
 import { buildSystemPrompt, buildUserPrompt, type ExperimentRecord } from './prompt';
@@ -23,6 +24,7 @@ export class ResearchController {
 	constraints?: ParamConstraints;
 	private stopRequested = false;
 	private runAbort: AbortController | null = null;
+	private fetchAbort: AbortController | null = null;
 
 	constructor() {
 		this.bestConfig = { ...DEFAULT_CONFIG };
@@ -30,6 +32,8 @@ export class ResearchController {
 
 	stop() {
 		this.stopRequested = true;
+		this.fetchAbort?.abort();
+		this.runAbort?.abort();
 	}
 
 	stopCurrentRun() {
@@ -100,7 +104,7 @@ export class ResearchController {
 			this.bestConfig = { ...config };
 		}
 
-		const expName = `Research #${this.history.length + 1}`;
+		const expName = petname();
 		const dbId = await insertExperiment({
 			name: expName,
 			source: 'auto',
@@ -154,11 +158,13 @@ export class ResearchController {
 		const systemPrompt = buildSystemPrompt();
 		const userPrompt = buildUserPrompt(this.history, this.bestConfig, this.bestBpb, this.constraints);
 
+		this.fetchAbort = new AbortController();
 		try {
 			const response = await fetch('/api/research', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ systemPrompt, userPrompt })
+				body: JSON.stringify({ systemPrompt, userPrompt }),
+				signal: this.fetchAbort.signal
 			});
 
 			if (!response.ok) {
@@ -180,9 +186,12 @@ export class ResearchController {
 				reasoning: data.reasoning || 'No reasoning provided.'
 			};
 		} catch (e) {
+			if (this.stopRequested) return null;
 			console.error('Research API fetch failed:', e);
 			this.lastError = `Fetch failed: ${e}`;
 			return null;
+		} finally {
+			this.fetchAbort = null;
 		}
 	}
 }

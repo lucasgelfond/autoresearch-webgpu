@@ -44,7 +44,7 @@ export const DEFAULT_CONSTRAINTS: ParamConstraints = {
 	seqLen: { min: 64, max: 256 },
 	lr: { min: 0.00001, max: 0.01 },
 	trainSeconds: { max: 30 },
-	maxParams: { max: 3_000_000 },
+	maxParams: { max: 400_000 },
 };
 
 /** Sensible defaults loaded from static/defaults.json */

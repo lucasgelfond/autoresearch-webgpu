@@ -19,6 +19,7 @@
 	import Leaderboard from '$lib/components/Leaderboard.svelte';
 	import ConfigDiff from '$lib/components/ConfigDiff.svelte';
 	import ConstraintsModal from '$lib/components/ConstraintsModal.svelte';
+	import { petname } from '$lib/petname';
 
 	let gpuStatus = $state<WebGPUStatus | null>(null);
 	let config = $state<ExperimentConfig>({ ...DEFAULT_CONFIG });
@@ -30,7 +31,7 @@
 	let mode = $state<'manual' | 'research'>('manual');
 	let experiments = $state<ExperimentRecord[]>([]);
 	let currentReasoning = $state('');
-	let experimentName = $state('');
+	let experimentName = $state(petname());
 	let experimentDesc = $state('');
 	let listMode = $state<'leaderboard' | 'current'>('leaderboard');
 
@@ -128,7 +129,7 @@
 		inferences = [];
 		inferenceIdx = 0;
 		status = 'training...';
-		currentRunName = experimentName || `Run ${experiments.length + 1}`;
+		currentRunName = experimentName || petname();
 		currentReasoning = experimentDesc || '';
 		trainLoader.reset();
 		trainAbort = new AbortController();
@@ -172,7 +173,7 @@
 		const kept = experiments.length === 0 || r.valBpb < Math.min(...experiments.map(e => e.valBpb));
 
 		const dbId = await insertExperiment({
-			name: experimentName || `Run ${experiments.length + 1}`,
+			name: experimentName || petname(),
 			source: 'manual',
 			config: runConfig,
 			valBpb: r.valBpb,
@@ -193,6 +194,8 @@
 		await selectExperimentById(dbId);
 		status = `done — val_bpb: ${r.valBpb.toFixed(4)} | ${r.totalSteps} steps`;
 		running = false;
+		experimentName = petname();
+		experimentDesc = '';
 
 		// Save weights + generate sample in background (non-blocking)
 		(async () => {
@@ -238,7 +241,7 @@
 				waitingForRecommendation = false;
 				lossData = [];
 				currentReasoning = reasoning;
-				currentRunName = `Research #${(controller?.history.length ?? 0) + 1}`;
+				currentRunName = petname();
 				status = `experiment: ${reasoning}`;
 				if (listMode === 'current') setSelectedExp(null);
 				// Create in-progress experiment
@@ -413,7 +416,7 @@
 	<title>autoresearch-webgpu</title>
 </svelte:head>
 
-<main class="px-6 py-6 max-w-6xl mx-auto space-y-5">
+<main class="px-6 py-12 max-w-6xl mx-auto space-y-5">
 	{#if gpuStatus === null}
 		<p class="text-gray-400 font-mono text-sm">initializing webgpu...</p>
 	{:else if !gpuStatus.ok}
@@ -421,10 +424,14 @@
 			{gpuStatus.reason}
 		</div>
 	{:else}
-		<div class="max-w-[50%]">
+		<div class="max-w-xl">
 			<h1 class="text-lg font-mono text-gray-200">autoresearch-webgpu</h1>
 			<p class="text-xs font-mono text-gray-500">
 				Based on Andrej Karpathy's <a href="https://github.com/karpathy/autoresearch" class="underline hover:text-gray-300">autoresearch</a> and built on Eric Zhang's <a href="https://github.com/ekzhang/jax-js" class="underline hover:text-gray-300">jax-js</a>. Built by <a href="https://lucasgelfond.online" class="underline hover:text-gray-300">Lucas Gelfond</a>. Source <a href="https://github.com/lucasgelfond/autoresearch-webgpu" class="underline hover:text-gray-300">here</a>.
+			</p>
+			<p class="text-xs font-mono text-gray-600 mt-2">
+				This playground trains small models on your laptop's GPU, and uses the results + Claude to build better models. Lower loss means a better model. 
+				
 			</p>
 		</div>
 		<div class="flex items-center gap-3">
@@ -455,9 +462,9 @@
 			</button>
 		</div>
 
-		<div class="grid grid-cols-[240px_1fr_240px] gap-4 h-[calc(100vh-13rem)]">
+		<div class="grid grid-cols-1 md:grid-cols-[240px_1fr_240px] gap-4 md:h-[calc(100vh-20rem)]">
 			<!-- Left: config + controls -->
-			<div class="space-y-2 overflow-y-auto h-full">
+			<div class="space-y-2 md:overflow-y-auto md:h-full">
 				<div class="rounded border border-gray-800 p-3">
 					<h2 class="text-xs font-mono text-gray-400 mb-2">config</h2>
 					<ConfigEditor bind:config disabled={running} {constraints} />
@@ -521,7 +528,7 @@
 			</div>
 
 			<!-- Center: chart + status + inference -->
-			<div class="flex flex-col h-full overflow-hidden">
+			<div class="flex flex-col md:h-full md:overflow-hidden">
 				<div class="rounded border border-gray-800 p-3 space-y-2 flex-1 overflow-y-auto">
 					{#if selectedExp}
 						<div class="flex items-center gap-2 font-mono text-xs">
@@ -559,7 +566,7 @@
 
 					<!-- Inference -->
 					<div class="border-t border-gray-800 pt-2 space-y-1.5">
-						<h2 class="text-xs font-mono text-gray-400">inference</h2>
+						<h2 class="text-xs font-mono text-gray-400">test current model / inference</h2>
 						<div class="flex items-center gap-2">
 							<input
 								type="text"
@@ -617,8 +624,8 @@
 
 				</div>
 
-			<!-- Right: leaderboard / research log -->
-			<div class="flex flex-col h-full overflow-hidden">
+			<!-- Right: leaderboard / history -->
+			<div class="flex flex-col md:h-full md:overflow-hidden">
 				<div class="rounded border border-gray-800 p-3 flex flex-col flex-1 min-h-0">
 					<div class="flex items-center justify-between mb-2 shrink-0">
 						<div class="flex items-center gap-1 text-xs font-mono">
