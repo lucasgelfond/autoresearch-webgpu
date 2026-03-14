@@ -425,12 +425,12 @@
 		</div>
 	{:else}
 		<div class="max-w-xl space-y-3">
-			<h1 class="text-lg font-mono font-bold text-white">autoresearch-webgpu</h1>
+			<h1 class="text-lg font-mono font-bold text-white">autoresearch, in the browser!</h1>
 			<p class="text-xs font-mono text-gray-300 leading-relaxed">
-				Based on Andrej Karpathy's <a href="https://github.com/karpathy/autoresearch" class="underline hover:text-gray-200">autoresearch</a> and built on <a href="https://www.ekzhang.com/" class="underline hover:text-gray-200">Eric Zhang</a>'s <a href="https://github.com/ekzhang/jax-js" class="underline hover:text-gray-200">jax-js</a>. Built by <a href="https://lucasgelfond.online" class="underline hover:text-gray-200">Lucas Gelfond</a>. Source <a href="https://github.com/lucasgelfond/autoresearch-webgpu" class="underline hover:text-gray-200">here</a>.
+				Let Claude train a small language model (all on device, with WebGPU!) by writing training code, running experiments, and iterating on its progress!
 			</p>
 			<p class="text-[10px] font-mono text-gray-500 leading-relaxed">
-				Claude writes training code, runs it in your browser via WebGPU, measures the result, and iterates. A model training another model! Lower loss = better.
+				Based on Andrej Karpathy's <a href="https://github.com/karpathy/autoresearch" class="underline hover:text-gray-200">autoresearch</a> and built on <a href="https://www.ekzhang.com/" class="underline hover:text-gray-200">Eric Zhang</a>'s <a href="https://github.com/ekzhang/jax-js" class="underline hover:text-gray-200">jax-js</a>. Built by <a href="https://lucasgelfond.online" class="underline hover:text-gray-200">Lucas Gelfond</a>. Source <a href="https://github.com/lucasgelfond/autoresearch-webgpu" class="underline hover:text-gray-200">here</a>.
 			</p>
 		</div>
 		{#if status === 'error'}
