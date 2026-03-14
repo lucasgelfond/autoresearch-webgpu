@@ -44,7 +44,7 @@ export const DEFAULT_CONFIG: ExperimentConfig = {
 
 	trainSeconds: 60,
 
-	vocabSize: 2048
+	vocabSize: 256
 };
 
 /** Estimate total parameter count for a config. */
