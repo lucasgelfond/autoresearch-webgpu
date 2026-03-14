@@ -18,6 +18,7 @@
 	import ConfigEditor from '$lib/components/ConfigEditor.svelte';
 	import ResearchLog from '$lib/components/ResearchLog.svelte';
 	import Leaderboard from '$lib/components/Leaderboard.svelte';
+	import ConfigDiff from '$lib/components/ConfigDiff.svelte';
 
 	let gpuStatus = $state<WebGPUStatus | null>(null);
 	let config = $state<ExperimentConfig>({ ...DEFAULT_CONFIG });
@@ -64,6 +65,13 @@
 				DataLoader.fetch('/data/val.bin')
 			]);
 			await loadFromDb();
+			// Restore selection from URL
+			const expParam = new URL(window.location.href).searchParams.get('exp');
+			if (expParam) {
+				const id = Number(expParam);
+				const exp = experiments.find(e => e.id === id);
+				if (exp) selectExperiment(exp);
+			}
 			status = 'ready';
 		}
 	});
@@ -210,10 +218,26 @@
 		controller?.stop();
 	}
 
-	async function selectExperimentById(id: number) {
+	function setSelectedExp(id: number | null) {
 		selectedExpId = id;
-		inferences = await getInferencesForExperiment(id);
+		const url = new URL(window.location.href);
+		if (id != null) {
+			url.searchParams.set('exp', String(id));
+		} else {
+			url.searchParams.delete('exp');
+		}
+		history.replaceState(null, '', url);
+	}
+
+	function selectExperimentById(id: number) {
+		setSelectedExp(id);
 		inferenceIdx = 0;
+		// Load inferences in background — don't block the UI
+		getInferencesForExperiment(id).then(rows => {
+			if (selectedExpId === id) {
+				inferences = rows;
+			}
+		});
 	}
 
 	function selectExperiment(exp: ExperimentRecord) {
@@ -263,7 +287,7 @@
 		await clearAllData();
 		experiments = [];
 		config = { ...DEFAULT_CONFIG };
-		selectedExpId = null;
+		setSelectedExp(null);
 		inferences = [];
 		currentExpDbId = null;
 	}
@@ -284,20 +308,12 @@
 	let currentInference = $derived(inferences.length > 0 ? inferences[inferenceIdx] : null);
 	let selectedExp = $derived(selectedExpId ? experiments.find(e => e.id === selectedExpId) ?? null : null);
 
-	/** Config diff: changes from the previous experiment to the selected one. */
-	let configDiff = $derived(() => {
-		if (!selectedExp) return [];
+	/** Previous experiment's config, for showing diff. */
+	let prevExpConfig = $derived.by(() => {
+		if (!selectedExp) return null;
 		const idx = experiments.findIndex(e => e.id === selectedExp!.id);
-		if (idx <= 0) return [];
-		const prev = experiments[idx - 1].config;
-		const curr = selectedExp!.config;
-		const diffs: { key: string; from: string | number; to: string | number }[] = [];
-		for (const key of Object.keys(curr) as (keyof ExperimentConfig)[]) {
-			if (prev[key] !== curr[key]) {
-				diffs.push({ key, from: prev[key] as string | number, to: curr[key] as string | number });
-			}
-		}
-		return diffs;
+		if (idx <= 0) return null;
+		return experiments[idx - 1].config;
 	});
 	/** True when viewing an old experiment's config (inputs should be locked). */
 	let viewingExisting = $derived(!!selectedExpId && !running);
@@ -308,7 +324,7 @@
 		experimentName = `${baseName} (fork)`;
 		experimentDesc = '';
 		// config is already set from selectExperiment — just unlock
-		selectedExpId = null;
+		setSelectedExp(null);
 	}
 </script>
 
@@ -324,10 +340,10 @@
 			{gpuStatus.reason}
 		</div>
 	{:else}
-		<div>
+		<div class="max-w-[50%]">
 			<h1 class="text-lg font-mono text-gray-200">autoresearch-webgpu</h1>
 			<p class="text-xs font-mono text-gray-500">
-				Based on Andrej Karpathy's <a href="https://github.com/karpathy/autoresearch" class="underline hover:text-gray-300">autoresearch</a> and built on Eric Zhang's <a href="https://github.com/ekzhang/jax-js" class="underline hover:text-gray-300">jax-js</a>. Built by <a href="https://lucasgelfond.com" class="underline hover:text-gray-300">Lucas Gelfond</a>, in New York, with love.
+				Based on Andrej Karpathy's <a href="https://github.com/karpathy/autoresearch" class="underline hover:text-gray-300">autoresearch</a> and built on Eric Zhang's <a href="https://github.com/ekzhang/jax-js" class="underline hover:text-gray-300">jax-js</a>. Built by <a href="https://lucasgelfond.online" class="underline hover:text-gray-300">Lucas Gelfond</a>, in New York, with love.
 			</p>
 		</div>
 		<div class="flex items-center gap-4">
@@ -436,14 +452,11 @@
 							<span class="text-gray-200">{selectedExp.name}</span>
 							<span class="text-gray-500 tabular-nums ml-auto">{selectedExp.valBpb.toFixed(4)} bpb</span>
 						</div>
-						{#if configDiff().length > 0}
-							<div class="flex flex-wrap gap-x-3 gap-y-1 font-mono text-xs">
-								{#each configDiff() as d}
-									<span class="text-gray-500">
-										{d.key}: <span class="text-gray-600">{d.from}</span> → <span class="text-yellow-400">{d.to}</span>
-									</span>
-								{/each}
-							</div>
+						{#if prevExpConfig}
+							<ConfigDiff before={prevExpConfig} after={selectedExp.config} />
+						{/if}
+						{#if selectedExp.reasoning && selectedExp.reasoning !== selectedExp.name}
+							<p class="text-xs text-gray-400 font-mono">{selectedExp.reasoning}</p>
 						{/if}
 					{:else}
 						<h2 class="text-sm font-mono text-gray-400">loss</h2>
@@ -511,13 +524,7 @@
 					</div>
 				</div>
 
-				{#if experiments.length > 0}
-					<div class="rounded border border-gray-800 p-4">
-						<h2 class="text-sm font-mono text-gray-400 mb-2">research log</h2>
-						<ResearchLog {experiments} bestConfig={config} />
-					</div>
-				{/if}
-			</div>
+				</div>
 
 			<!-- Right: leaderboard -->
 			<div class="space-y-4">
