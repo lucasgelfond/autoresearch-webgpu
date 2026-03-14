@@ -85,7 +85,8 @@ export async function clearAll(): Promise<void> {
 }
 
 export function exportAsJson(experiments: ExperimentRecord[]): string {
-	return JSON.stringify(experiments, null, 2);
+	const slim = experiments.map(({ lossCurve, ...rest }) => rest);
+	return JSON.stringify(slim, null, 2);
 }
 
 export function exportAsTsv(experiments: ExperimentRecord[]): string {

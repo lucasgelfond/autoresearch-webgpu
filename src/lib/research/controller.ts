@@ -18,7 +18,8 @@ export class ResearchController {
 	bestBpb: number = Infinity;
 	running: boolean = false;
 
-	private nextId = 1;
+	nextId = 1;
+	lastError = '';
 	private stopRequested = false;
 
 	constructor() {
@@ -51,7 +52,7 @@ export class ResearchController {
 		while (!this.stopRequested) {
 			const proposal = await this.getNextConfig();
 			if (!proposal) {
-				callbacks.onError?.('Failed to get next config from Claude.');
+				callbacks.onError?.(this.lastError || 'Failed to get next config from Claude.');
 				break;
 			}
 
@@ -125,14 +126,16 @@ export class ResearchController {
 			});
 
 			if (!response.ok) {
-				const err = await response.json();
-				console.error('Research API error:', err);
+				const err = await response.text();
+				console.error('Research API error:', response.status, err);
+				this.lastError = `API ${response.status}: ${err.slice(0, 200)}`;
 				return null;
 			}
 
 			const data = await response.json();
 			if (data.error) {
 				console.error('Research API error:', data.error);
+				this.lastError = `API error: ${data.error}`;
 				return null;
 			}
 
@@ -142,6 +145,7 @@ export class ResearchController {
 			};
 		} catch (e) {
 			console.error('Research API fetch failed:', e);
+			this.lastError = `Fetch failed: ${e}`;
 			return null;
 		}
 	}

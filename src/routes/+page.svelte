@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { initWebGPU, type WebGPUStatus } from '$lib/webgpu';
-	import { DEFAULT_CONFIG, estimateParams, type ExperimentConfig } from '$lib/model/config';
+	import { DEFAULT_CONFIG, type ExperimentConfig } from '$lib/model/config';
 	import { DataLoader } from '$lib/data/loader';
 	import { trainRun, type StepMetrics, type RunResult } from '$lib/train/loop';
 	import { sampleText } from '$lib/sample';
@@ -26,6 +26,9 @@
 	let currentReasoning = $state('');
 	let prompt = $state('');
 	let temperature = $state(0.8);
+	let selectedExperiment = $state<ExperimentRecord | null>(null);
+	let nextManualId = $state(1);
+
 	let pastLossRuns = $derived(
 		experiments
 			.filter(e => e.lossCurve && e.lossCurve.length > 1)
@@ -48,10 +51,10 @@
 				DataLoader.fetch('/data/val.bin')
 			]);
 
-			// Restore previous session
 			const saved = await loadExperiments();
 			if (saved.length > 0) {
 				experiments = saved;
+				nextManualId = Math.max(...saved.map(e => e.id)) + 1;
 			}
 			const best = await loadBestConfig();
 			if (best) {
@@ -72,9 +75,13 @@
 		status = 'training...';
 		trainLoader.reset();
 
-		const r = await trainRun(config, trainLoader, valLoader, {
+		const runConfig = { ...config };
+		const lossCurve: { step: number; loss: number }[] = [];
+
+		const r = await trainRun(runConfig, trainLoader, valLoader, {
 			onStep(m: StepMetrics) {
 				lossData = [...lossData, { step: m.step, loss: m.loss }];
+				lossCurve.push({ step: m.step, loss: m.loss });
 				status = `step ${m.step} | loss ${m.loss.toFixed(4)} | ${(m.elapsed / 1000).toFixed(1)}s`;
 			},
 			onDone(r: RunResult) {
@@ -83,6 +90,35 @@
 			}
 		});
 
+		let generatedSample = '';
+		try {
+			status = 'generating sample...';
+			generatedSample = await sampleText(r.params, runConfig, '', 200, 0.8);
+		} catch (_) {}
+
+		const id = nextManualId++;
+		const record: ExperimentRecord = {
+			id,
+			config: runConfig,
+			valBpb: r.valBpb,
+			elapsed: r.elapsed,
+			totalSteps: r.totalSteps,
+			reasoning: 'Manual training run',
+			kept: experiments.length === 0 || r.valBpb < Math.min(...experiments.map(e => e.valBpb)),
+			sampleText: generatedSample,
+			lossCurve
+		};
+
+		experiments = [...experiments, record];
+		await saveExperiment(record);
+		selectedExperiment = record;
+		sample = generatedSample;
+
+		if (record.kept) {
+			await saveBestConfig(runConfig, r.valBpb);
+		}
+
+		status = `done — val_bpb: ${r.valBpb.toFixed(4)} | ${r.totalSteps} steps | ${(r.elapsed / 1000).toFixed(1)}s`;
 		running = false;
 	}
 
@@ -92,16 +128,16 @@
 		running = true;
 		controller = new ResearchController();
 
-		// Restore best if we have history
 		const best = await loadBestConfig();
 		if (best) {
 			controller.bestConfig = best.config;
 			controller.bestBpb = best.bpb;
 			controller.history = [...experiments];
 		}
+		controller.nextId = nextManualId;
 
 		await controller.run(trainLoader, valLoader, {
-			onExperimentStart(id, config, reasoning) {
+			onExperimentStart(id, cfg, reasoning) {
 				lossData = [];
 				currentReasoning = reasoning;
 				status = `experiment #${id}: ${reasoning}`;
@@ -111,11 +147,14 @@
 			},
 			async onExperimentDone(record: ExperimentRecord) {
 				experiments = [...experiments, record];
+				nextManualId = record.id + 1;
 				await saveExperiment(record);
 				if (record.kept && controller) {
 					await saveBestConfig(controller.bestConfig, controller.bestBpb);
 					config = { ...controller.bestConfig };
 				}
+				selectedExperiment = record;
+				sample = record.sampleText || '';
 				status = `#${record.id} ${record.kept ? 'KEPT' : 'discarded'} — bpb ${record.valBpb.toFixed(4)}`;
 			},
 			onError(error) {
@@ -137,11 +176,19 @@
 		sampling = false;
 	}
 
+	function selectExperiment(exp: ExperimentRecord) {
+		selectedExperiment = exp;
+		sample = exp.sampleText || '';
+	}
+
 	async function handleClear() {
 		if (!confirm('Clear all experiment history?')) return;
 		await clearAll();
 		experiments = [];
 		config = { ...DEFAULT_CONFIG };
+		selectedExperiment = null;
+		sample = '';
+		nextManualId = 1;
 	}
 
 	function handleExport() {
@@ -167,7 +214,6 @@
 			{gpuStatus.reason}
 		</div>
 	{:else}
-		<!-- Mode toggle -->
 		<div class="flex items-center gap-4">
 			<div class="flex rounded border border-gray-700 text-sm font-mono overflow-hidden">
 				<button
@@ -198,7 +244,7 @@
 			{/if}
 		</div>
 
-		<div class="grid grid-cols-[280px_1fr_240px] gap-6">
+		<div class="grid grid-cols-[280px_1fr_280px] gap-6">
 			<!-- Left: config + controls -->
 			<div class="space-y-4">
 				<div class="rounded border border-gray-800 p-4">
@@ -234,7 +280,7 @@
 				{/if}
 			</div>
 
-			<!-- Center: charts + output -->
+			<!-- Center: chart + status + research log -->
 			<div class="space-y-4">
 				<div class="rounded border border-gray-800 p-4">
 					<h2 class="text-sm font-mono text-gray-400 mb-2">loss</h2>
@@ -247,43 +293,6 @@
 					{status}
 				</div>
 
-				{#if result && mode === 'manual'}
-					<div class="rounded border border-gray-800 p-4 font-mono text-sm">
-						<div class="grid grid-cols-3 gap-2 text-gray-400">
-							<div>val_bpb <span class="text-gray-200">{result.valBpb.toFixed(4)}</span></div>
-							<div>steps <span class="text-gray-200">{result.totalSteps}</span></div>
-							<div>time <span class="text-gray-200">{(result.elapsed / 1000).toFixed(1)}s</span></div>
-						</div>
-					</div>
-
-					<div class="rounded border border-gray-800 p-4 space-y-3">
-						<h2 class="text-sm font-mono text-gray-400">inference</h2>
-						<div class="flex gap-2">
-							<input
-								type="text"
-								bind:value={prompt}
-								placeholder="enter a prompt..."
-								class="flex-1 bg-gray-800 border border-gray-700 rounded px-3 py-1.5 font-mono text-sm text-gray-200 placeholder-gray-500"
-								onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter') generateSample(); }}
-							/>
-							<label class="flex items-center gap-1 text-xs text-gray-500 font-mono">
-								temp
-								<input type="number" bind:value={temperature} min={0.1} max={2} step={0.1} class="w-14 bg-gray-800 border border-gray-700 rounded px-1 py-1.5 text-right tabular-nums text-sm text-gray-200" />
-							</label>
-							<button
-								onclick={generateSample}
-								disabled={sampling}
-								class="rounded bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 px-3 py-1.5 font-mono text-sm transition-colors"
-							>
-								{sampling ? '...' : 'generate'}
-							</button>
-						</div>
-						{#if sample}
-							<pre class="text-sm text-gray-300 whitespace-pre-wrap break-all font-mono leading-relaxed max-h-48 overflow-y-auto">{sample}</pre>
-						{/if}
-					</div>
-				{/if}
-
 				{#if mode === 'research' && experiments.length > 0}
 					<div class="rounded border border-gray-800 p-4">
 						<h2 class="text-sm font-mono text-gray-400 mb-2">research log</h2>
@@ -292,11 +301,39 @@
 				{/if}
 			</div>
 
-			<!-- Right: leaderboard -->
+			<!-- Right: leaderboard + inference -->
 			<div class="space-y-4">
 				<div class="rounded border border-gray-800 p-4">
 					<h2 class="text-sm font-mono text-gray-400 mb-3">leaderboard</h2>
-					<Leaderboard {experiments} />
+					<Leaderboard {experiments} onSelect={selectExperiment} selected={selectedExperiment} />
+				</div>
+
+				<div class="rounded border border-gray-800 p-4 space-y-3">
+					<h2 class="text-sm font-mono text-gray-400">inference</h2>
+					{#if result}
+						<div class="flex gap-2">
+							<input
+								type="text"
+								bind:value={prompt}
+								placeholder="prompt..."
+								class="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 font-mono text-xs text-gray-200 placeholder-gray-500"
+								onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter') generateSample(); }}
+							/>
+							<input type="number" bind:value={temperature} min={0.1} max={2} step={0.1} class="w-12 bg-gray-800 border border-gray-700 rounded px-1 py-1 text-right tabular-nums text-xs text-gray-200 font-mono" title="temperature" />
+							<button
+								onclick={generateSample}
+								disabled={sampling}
+								class="rounded bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 px-2 py-1 font-mono text-xs transition-colors"
+							>
+								{sampling ? '...' : 'go'}
+							</button>
+						</div>
+					{:else}
+						<p class="text-gray-500 text-xs font-mono">train a model first</p>
+					{/if}
+					{#if sample}
+						<pre class="text-xs text-gray-300 whitespace-pre-wrap break-all font-mono leading-relaxed max-h-64 overflow-y-auto">{sample}</pre>
+					{/if}
 				</div>
 			</div>
 		</div>
