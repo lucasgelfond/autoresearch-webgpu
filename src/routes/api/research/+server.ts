@@ -1,7 +1,17 @@
 import { json } from '@sveltejs/kit';
+import { dev } from '$app/environment';
 import type { RequestHandler } from './$types';
 
+const ALLOWED_ORIGIN = 'https://autoresearch.lucasgelfond.online';
+
 export const POST: RequestHandler = async ({ request, platform }) => {
+	if (!dev) {
+		const origin = request.headers.get('origin');
+		if (origin !== ALLOWED_ORIGIN) {
+			return json({ error: 'Forbidden' }, { status: 403 });
+		}
+	}
+
 	const apiKey = platform?.env?.ANTHROPIC_API_KEY;
 	if (!apiKey) {
 		return json({ error: 'API key not configured' }, { status: 500 });
