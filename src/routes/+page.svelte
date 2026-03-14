@@ -260,10 +260,19 @@
 
 	function setSelectedExp(id: number | null) {
 		selectedExpId = id;
+		inferences = [];
+		inferenceIdx = 0;
+		streamingOutput = '';
+		sampling = false;
 		const url = new URL(window.location.href);
 		if (id != null) url.searchParams.set('exp', String(id));
 		else url.searchParams.delete('exp');
 		history.replaceState(null, '', url);
+		if (id != null) {
+			getInferencesForExperiment(id).then(rows => {
+				if (selectedExpId === id) inferences = rows;
+			});
+		}
 	}
 
 	function setListMode(m: 'leaderboard' | 'current') {
@@ -273,13 +282,6 @@
 
 	function selectExperimentById(id: number) {
 		setSelectedExp(id);
-		inferences = [];
-		inferenceIdx = 0;
-		streamingOutput = '';
-		sampling = false;
-		getInferencesForExperiment(id).then(rows => {
-			if (selectedExpId === id) inferences = rows;
-		});
 	}
 
 	function selectExperiment(exp: ExperimentRecord) {
@@ -404,7 +406,7 @@
 		<div class="max-w-xl space-y-3">
 			<h1 class="text-lg font-mono font-bold text-white">autoresearch, in the browser!</h1>
 			<p class="text-xs font-mono text-gray-300 leading-relaxed">
-				Let Claude train a small language model (all on device, with WebGPU!) by writing training code, running experiments, and iterating on its progress!
+				Train a small language model (all on device, with WebGPU!) by generating training code, running experiments, and iterating on progress.
 			</p>
 			<p class="text-[10px] font-mono text-gray-500 leading-relaxed">
 				Based on Andrej Karpathy's <a href="https://github.com/karpathy/autoresearch" class="underline hover:text-gray-200">autoresearch</a> and built on <a href="https://www.ekzhang.com/" class="underline hover:text-gray-200">Eric Zhang</a>'s <a href="https://github.com/ekzhang/jax-js" class="underline hover:text-gray-200">jax-js</a>. Built by <a href="https://lucasgelfond.online" class="underline hover:text-gray-200">Lucas Gelfond</a>. Source <a href="https://github.com/lucasgelfond/autoresearch-webgpu" class="underline hover:text-gray-200">here</a>.
@@ -555,8 +557,15 @@
 								class="w-12 bg-gray-800 border border-gray-700 rounded px-1 py-1 text-right tabular-nums text-xs text-gray-200 font-mono disabled:opacity-40"
 								title="temperature" />
 							<button onclick={generateSample} disabled={!selectedExpId || sampling}
-								class="rounded bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 px-2 py-1 font-mono text-xs transition-colors">
-								{sampling ? '...' : 'go'}
+								class="rounded bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 px-3 py-1 font-mono text-xs transition-colors">
+								{#if sampling}
+									<svg class="animate-spin h-3.5 w-3.5 text-gray-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+										<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+										<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+									</svg>
+								{:else}
+									go
+								{/if}
 							</button>
 						</div>
 						<div class="flex-1 min-h-0 overflow-y-auto">
