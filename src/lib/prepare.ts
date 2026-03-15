@@ -4,7 +4,7 @@
  * Generated code receives everything here as globals.
  */
 
-import { numpy as np, nn, random, tree, blockUntilReady, valueAndGrad } from '@jax-js/jax';
+import { numpy as np, nn, random, tree, blockUntilReady, valueAndGrad, jit, vmap, grad } from '@jax-js/jax';
 import { adamw, applyUpdates } from '@jax-js/optax';
 import { DataLoader } from './data/loader';
 import { lrMultiplier } from './train/schedule';
@@ -78,6 +78,7 @@ async function evaluate(
 export function getPrepareGlobals() {
 	return {
 		np, nn, random, tree, blockUntilReady, valueAndGrad,
+		jit, vmap, grad,
 		adamw, applyUpdates,
 		evaluate, lrSchedule: lrMultiplier, yieldToUI,
 		VOCAB_SIZE: 256,

@@ -94,7 +94,7 @@ const optimizer = adamw((step) => {
 }, { weightDecay, b1: 0.9, b2: 0.95 });
 
 let optState = optimizer.init(tree.ref(params));
-const lossGrad = valueAndGrad((p, input, target) => lossFn(p, input, target));
+const lossGrad = jit(valueAndGrad((p, input, target) => lossFn(p, input, target)));
 
 let step = 0, elapsed = 0;
 const t0 = performance.now();
