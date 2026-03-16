@@ -11,7 +11,7 @@
 	import {
 		getDb, insertExperiment, insertInference, insertLossCurve,
 		getBestExperiment, getInferencesForExperiment, clearAllData,
-		exportCsvZip, updateWeightsPath, getAllExperimentRecords, type InferenceRow
+		exportCsvZip, importCsvZip, updateWeightsPath, getAllExperimentRecords, type InferenceRow
 	} from '$lib/db';
 	import { saveWeights, loadWeights } from '$lib/weights';
 	import LossChart from '$lib/components/LossChart.svelte';
@@ -52,6 +52,8 @@
 	let waitingForRecommendation = $state(false);
 	let researchProfiles = $state<ResearchEndpointProfile[]>([]);
 	let selectedResearchProfileId = $state<string | null>(null);
+	let importing = $state(false);
+	let importInput = $state<HTMLInputElement | null>(null);
 
 	// In-memory loaded model state for inference
 	type LoadedModel = { forward: ForwardFn; params: Params; vocabSize: number; seqLen: number; expId: number };
@@ -404,6 +406,32 @@
 		URL.revokeObjectURL(url);
 	}
 
+	function handleImportClick() {
+		if (running || importing) return;
+		importInput?.click();
+	}
+
+	async function handleImportFile(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		if (!file) return;
+
+		importing = true;
+		status = 'importing experiments...';
+
+		try {
+			const summary = await importCsvZip(file);
+			await loadFromDb();
+			status = `imported ${summary.addedExperiments} experiments, ${summary.addedLossSteps} loss steps, ${summary.addedInferences} inferences`;
+		} catch (e) {
+			const message = e instanceof Error ? e.message : String(e);
+			status = `import failed: ${message}`;
+		} finally {
+			importing = false;
+			input.value = '';
+		}
+	}
+
 	let currentInference = $derived(inferences.length > 0 ? inferences[inferenceIdx] : null);
 	let selectedExp = $derived(selectedExpId ? experiments.find(e => e.id === selectedExpId) ?? null : null);
 	let hasAnyModel = $derived(experiments.length > 0 || running);
@@ -448,20 +476,37 @@
 				something went wrong during initialization. check the console for details.
 			</div>
 		{:else if isFirstLoad}
-		<div class="flex flex-col items-center justify-center space-y-6 mx-auto" style="min-height: calc(100vh - 14rem);">
-			{#if status === 'ready'}
-				<button
-					onclick={() => { mode = 'research'; startResearch(); }}
-					class="rounded-lg bg-blue-600 hover:bg-blue-500 px-8 py-4 font-mono text-sm text-white transition-colors"
-				>
-					start research
-				</button>
-				<p class="text-xs font-mono text-gray-500 max-w-sm text-center">
-					Claude will write training code, run it in your browser, and iterate to find better models.
-				</p>
-			{:else}
-				<p class="text-sm font-mono text-gray-500">{status === 'initializing' ? 'initializing...' : status}</p>
-			{/if}
+		<div class="space-y-4">
+			<EndpointManager bind:profiles={researchProfiles} bind:selectedId={selectedResearchProfileId} disabled={running || importing} />
+			<div class="rounded border border-gray-800 bg-gray-950/60 p-6 flex flex-col items-center justify-center space-y-4 mx-auto" style="min-height: calc(100vh - 18rem);">
+				<input bind:this={importInput} type="file" accept=".zip,application/zip" class="hidden" onchange={handleImportFile} />
+				{#if status === 'initializing' || status === 'loading data...'}
+					<p class="text-sm font-mono text-gray-500">{status}</p>
+				{:else}
+					<div class="flex flex-col items-center gap-3">
+						<button
+							onclick={() => { mode = 'research'; startResearch(); }}
+							disabled={running || importing}
+							class="rounded-lg bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 px-8 py-4 font-mono text-sm text-white transition-colors"
+						>
+							start research
+						</button>
+						<button
+							onclick={handleImportClick}
+							disabled={running || importing}
+							class="rounded border border-gray-700 px-5 py-2 font-mono text-xs text-gray-300 hover:border-gray-500 hover:text-white disabled:opacity-40 transition-colors"
+						>
+							{importing ? 'importing...' : 'import results zip'}
+						</button>
+					</div>
+					<p class="text-xs font-mono text-gray-500 max-w-sm text-center">
+						Configure a backend to run new research, or import a prior export ZIP to restore experiment history from another machine.
+					</p>
+					{#if status !== 'ready'}
+						<p class="text-sm font-mono text-amber-300 text-center">{status}</p>
+					{/if}
+				{/if}
+			</div>
 		</div>
 		{:else}
 		<div class="flex items-center gap-3">
@@ -641,12 +686,16 @@
 							selected={selectedExp}
 							sortByLoss={listMode === 'leaderboard'} />
 					</div>
-					{#if experiments.length > 0}
-						<div class="flex gap-3 mt-2 pt-2 border-t border-gray-800 shrink-0">
+					<div class="flex gap-3 mt-2 pt-2 border-t border-gray-800 shrink-0">
+						<input bind:this={importInput} type="file" accept=".zip,application/zip" class="hidden" onchange={handleImportFile} />
+						<button onclick={handleImportClick} disabled={running || importing} class="text-gray-500 hover:text-gray-300 disabled:opacity-40 text-xs font-mono">
+							{importing ? 'importing...' : 'import'}
+						</button>
+						{#if experiments.length > 0}
 							<button onclick={handleExport} class="text-gray-500 hover:text-gray-300 text-xs font-mono">export</button>
 							<button onclick={handleClear} disabled={running} class="text-gray-500 hover:text-red-400 text-xs font-mono">clear</button>
-						</div>
-					{/if}
+						{/if}
+					</div>
 				</div>
 			</div>
 		</div>
