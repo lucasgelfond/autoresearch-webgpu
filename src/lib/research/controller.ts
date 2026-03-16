@@ -7,6 +7,7 @@ import { saveWeights } from '../weights';
 import { buildSystemPrompt, buildUserPrompt, type ExperimentRecord } from './prompt';
 import { BASELINE_CODE } from './baseline';
 import { parseClaudeResponse } from './parse';
+import type { ResearchEndpointProfile } from './providers';
 
 export type ResearchCallbacks = {
 	onExperimentStart?: (code: string, reasoning: string) => void;
@@ -24,6 +25,7 @@ export class ResearchController {
 	running: boolean = false;
 	lastError = '';
 	trainSeconds = 30;
+	profile: ResearchEndpointProfile | null = null;
 	private stopRequested = false;
 	private runAbort: AbortController | null = null;
 	private fetchAbort: AbortController | null = null;
@@ -149,7 +151,12 @@ export class ResearchController {
 			const response = await fetch('/api/research', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ systemPrompt, userPrompt, stream: true }),
+				body: JSON.stringify({
+					systemPrompt,
+					userPrompt,
+					stream: true,
+					profile: this.profile,
+				}),
 				signal: this.fetchAbort.signal
 			});
 
@@ -197,8 +204,8 @@ export class ResearchController {
 
 				try {
 					const event = JSON.parse(data);
-					if (event.type === 'content_block_delta' && event.delta?.text) {
-						const chunk = event.delta.text;
+					if (event.type === 'text_delta' && event.text) {
+						const chunk = event.text;
 						fullText += chunk;
 
 						// Try to extract streaming code from the partial JSON

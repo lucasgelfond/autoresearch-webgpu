@@ -17,7 +17,15 @@
 	import LossChart from '$lib/components/LossChart.svelte';
 	import CodeEditor from '$lib/components/CodeEditor.svelte';
 	import Leaderboard from '$lib/components/Leaderboard.svelte';
+	import EndpointManager from '$lib/components/EndpointManager.svelte';
 	import { petname } from '$lib/petname';
+	import { isConfiguredProfile, type ResearchEndpointProfile } from '$lib/research/providers';
+	import {
+		loadActiveResearchProfileId,
+		loadResearchProfiles,
+		saveActiveResearchProfileId,
+		saveResearchProfiles
+	} from '$lib/research/profile-store';
 
 	let gpuStatus = $state<WebGPUStatus | null>(null);
 	let code = $state(BASELINE_CODE);
@@ -42,6 +50,8 @@
 	let trainAbort: AbortController | null = null;
 	let inProgressExp = $state<ExperimentRecord | null>(null);
 	let waitingForRecommendation = $state(false);
+	let researchProfiles = $state<ResearchEndpointProfile[]>([]);
+	let selectedResearchProfileId = $state<string | null>(null);
 
 	// In-memory loaded model state for inference
 	type LoadedModel = { forward: ForwardFn; params: Params; vocabSize: number; seqLen: number; expId: number };
@@ -64,11 +74,21 @@
 	let trainLoader: DataLoader | null = null;
 	let valLoader: DataLoader | null = null;
 	let controller: ResearchController | null = null;
+	let selectedResearchProfile = $derived(
+		selectedResearchProfileId
+			? researchProfiles.find((profile) => profile.id === selectedResearchProfileId) ?? null
+			: null
+	);
+	let readyResearchProfile = $derived(
+		isConfiguredProfile(selectedResearchProfile) ? selectedResearchProfile : null
+	);
 
 	onMount(async () => {
 		try {
 			status = 'initializing';
 			await getDb();
+			researchProfiles = loadResearchProfiles();
+			selectedResearchProfileId = loadActiveResearchProfileId(researchProfiles);
 			gpuStatus = await initWebGPU();
 			if (!gpuStatus.ok) { status = 'error'; return; }
 			status = 'loading data...';
@@ -89,6 +109,12 @@
 			console.error('Init failed:', e);
 			status = 'error';
 		}
+	});
+
+	$effect(() => {
+		if (typeof window === 'undefined' || researchProfiles.length === 0) return;
+		saveResearchProfiles(researchProfiles);
+		saveActiveResearchProfileId(selectedResearchProfileId);
 	});
 
 	async function loadFromDb() {
@@ -190,12 +216,17 @@
 
 	async function startResearch() {
 		if (!trainLoader || !valLoader || running) return;
+		if (!readyResearchProfile) {
+			status = 'configure a research backend before starting';
+			return;
+		}
 
 		running = true;
 		waitingForRecommendation = true;
 		lossData = [];
 		status = 'starting...';
 		controller = new ResearchController();
+		controller.profile = readyResearchProfile;
 		setListMode('current');
 
 		const best = await getBestExperiment();
@@ -447,6 +478,7 @@
 				>auto</button>
 			</div>
 		</div>
+		<EndpointManager bind:profiles={researchProfiles} bind:selectedId={selectedResearchProfileId} disabled={running} />
 
 		<div class="grid grid-cols-1 md:grid-cols-[1fr_1fr_240px] gap-4 md:h-[calc(100vh-20rem)]">
 			<!-- Left: train.ts code -->
