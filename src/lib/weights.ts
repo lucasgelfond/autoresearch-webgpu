@@ -3,10 +3,19 @@ import { opfs } from '@jax-js/loaders';
 import type { Params } from './prepare';
 
 type ParamMeta = { key: string; shape: number[]; dtype: string; offset: number; byteLength: number };
+const WEIGHTS_PREFIX = 'weights/';
+
+function getWeightsPath(experimentId: number): string {
+	return `${WEIGHTS_PREFIX}exp-${experimentId}.bin`;
+}
+
+function getWeightsMetaPath(experimentId: number): string {
+	return `${WEIGHTS_PREFIX}exp-${experimentId}.meta.json`;
+}
 
 export async function saveWeights(experimentId: number, params: Params): Promise<string> {
-	const path = `weights/exp-${experimentId}.bin`;
-	const metaPath = `weights/exp-${experimentId}.meta.json`;
+	const path = getWeightsPath(experimentId);
+	const metaPath = getWeightsMetaPath(experimentId);
 
 	const metas: ParamMeta[] = [];
 	const buffers: Uint8Array[] = [];
@@ -41,8 +50,8 @@ export async function saveWeights(experimentId: number, params: Params): Promise
 }
 
 export async function loadWeights(experimentId: number): Promise<Params | null> {
-	const path = `weights/exp-${experimentId}.bin`;
-	const metaPath = `weights/exp-${experimentId}.meta.json`;
+	const path = getWeightsPath(experimentId);
+	const metaPath = getWeightsMetaPath(experimentId);
 
 	const metaBytes = await opfs.read(metaPath);
 	if (!metaBytes) return null;
@@ -75,4 +84,10 @@ export async function loadWeights(experimentId: number): Promise<Params | null> 
 	}
 
 	return params;
+}
+
+export async function clearSavedWeights(): Promise<void> {
+	const files = await opfs.list();
+	const weightFiles = files.filter((file) => file.name.startsWith(WEIGHTS_PREFIX));
+	await Promise.all(weightFiles.map((file) => opfs.remove(file.name)));
 }
