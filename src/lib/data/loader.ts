@@ -10,11 +10,17 @@ export class DataLoader {
 	private pos: number = 0;
 
 	constructor(data: Uint8Array) {
+		if (data.length < 2) {
+			throw new Error(`Dataset must contain at least 2 bytes, received ${data.length}`);
+		}
 		this.data = data;
 	}
 
 	static async fetch(url: string): Promise<DataLoader> {
 		const response = await globalThis.fetch(url);
+		if (!response.ok) {
+			throw new Error(`Failed to fetch ${url}: ${response.status} ${response.statusText}`);
+		}
 		const buffer = await response.arrayBuffer();
 		return new DataLoader(new Uint8Array(buffer));
 	}
@@ -24,6 +30,16 @@ export class DataLoader {
 	}
 
 	nextBatch(batchSize: number, seqLen: number): Batch {
+		if (!Number.isInteger(batchSize) || batchSize < 1) {
+			throw new Error(`batchSize must be a positive integer, received ${batchSize}`);
+		}
+		if (!Number.isInteger(seqLen) || seqLen < 1) {
+			throw new Error(`seqLen must be a positive integer, received ${seqLen}`);
+		}
+		if (this.data.length < seqLen + 1) {
+			throw new Error(`Dataset has ${this.data.length} bytes, which is too small for seqLen=${seqLen}`);
+		}
+
 		const input = new Int32Array(batchSize * seqLen);
 		const target = new Int32Array(batchSize * seqLen);
 
