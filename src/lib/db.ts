@@ -1,4 +1,5 @@
 import { PGlite } from '@electric-sql/pglite';
+import { clearSavedWeights } from './weights';
 
 let db: PGlite | null = null;
 
@@ -117,6 +118,7 @@ export async function updateWeightsPath(id: number, weightsPath: string): Promis
 
 export async function clearAllData(): Promise<void> {
 	const pg = await getDb();
+	await clearSavedWeights();
 	await pg.exec(`
 		DROP TABLE IF EXISTS inferences;
 		DROP TABLE IF EXISTS loss_steps;
