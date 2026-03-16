@@ -1,1 +1,5 @@
 @import 'tailwindcss';
+
+.cm-editor {
+  scrollbar-color: var(--color-gray-900) transparent;
+}
