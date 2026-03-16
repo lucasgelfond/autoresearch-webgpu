@@ -122,7 +122,12 @@ export async function getAllExperiments(): Promise<ExperimentRow[]> {
 export async function getBestExperiment(): Promise<ExperimentRow | null> {
 	const pg = await getDb();
 	const result = await pg.query<ExperimentRow>(
-		`SELECT * FROM experiments WHERE error IS NULL ORDER BY val_bpb ASC LIMIT 1`
+		`SELECT *
+		 FROM experiments
+		 WHERE error IS NULL
+		   AND val_bpb = val_bpb
+		 ORDER BY val_bpb ASC, created_at DESC, id DESC
+		 LIMIT 1`
 	);
 	return result.rows[0] ?? null;
 }
@@ -530,7 +535,7 @@ async function updateExperimentLineageBatch(
 	const values = rows
 		.map((_, idx) => {
 			const base = idx * 3;
-			return `($${base + 1}, $${base + 2}, $${base + 3})`;
+			return `($${base + 1}::integer, $${base + 2}::integer, $${base + 3}::text)`;
 		})
 		.join(', ');
 

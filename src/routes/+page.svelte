@@ -59,6 +59,10 @@
 	let workspaceTab = $state<'chart' | 'code' | 'inference'>('chart');
 	let backendCollapsed = $state(false);
 	let leaderboardSort = $state<'bpb' | 'newest' | 'oldest' | 'steps' | 'name'>('bpb');
+	let chartSeriesMode = $state<'all' | 'focus'>('all');
+	let chartScaleMode = $state<'fit' | 'trim' | 'manual'>('fit');
+	let chartYMinInput = $state('');
+	let chartYMaxInput = $state('');
 
 	// In-memory loaded model state for inference
 	type LoadedModel = { forward: ForwardFn; params: Params; vocabSize: number; seqLen: number; expId: number };
@@ -104,6 +108,31 @@
 		}
 		return 'no configured backend';
 	});
+	let activeResearchLabel = $derived.by(() => {
+		if (!readyResearchProfile) return 'research backend';
+		const name = readyResearchProfile.name.trim();
+		if (name) return name;
+		const model = readyResearchProfile.model.trim();
+		if (model) return model;
+		return readyResearchProfile.provider === 'openai' ? 'OpenAI-compatible backend' : 'Anthropic-compatible backend';
+	});
+	let canFocusChart = $derived(Boolean(selectedExpId) || lossData.length >= 2);
+	let chartYMin = $derived.by(() => {
+		const trimmed = String(chartYMinInput ?? '').trim();
+		if (trimmed === '') return null;
+		const value = Number(trimmed);
+		return Number.isFinite(value) ? value : null;
+	});
+	let chartYMax = $derived.by(() => {
+		const trimmed = String(chartYMaxInput ?? '').trim();
+		if (trimmed === '') return null;
+		const value = Number(trimmed);
+		return Number.isFinite(value) ? value : null;
+	});
+	let chartManualRangeValid = $derived(
+		chartScaleMode !== 'manual' ||
+		(chartYMin != null && chartYMax != null && chartYMax > chartYMin)
+	);
 
 	onMount(async () => {
 		try {
@@ -140,9 +169,17 @@
 		saveActiveResearchProfileId(selectedResearchProfileId);
 	});
 
+	$effect(() => {
+		if (chartSeriesMode === 'focus' && !canFocusChart) {
+			chartSeriesMode = 'all';
+		}
+	});
+
 	async function loadFromDb() {
 		experiments = await getAllExperimentRecords();
-		const best = await getBestExperiment();
+		const best = [...experiments]
+			.filter((exp) => !exp.error && Number.isFinite(exp.valBpb))
+			.sort((a, b) => a.valBpb - b.valBpb || b.id - a.id)[0];
 		if (best) {
 			code = best.code;
 		}
@@ -446,11 +483,27 @@
 		controller.profile = readyResearchProfile;
 		setListMode('current');
 
-		const best = await getBestExperiment();
-		if (best) {
-			controller.bestCode = best.code;
-			controller.bestBpb = best.val_bpb;
-			controller.history = [...experiments];
+		controller.history = [...experiments];
+		const bestExperiment = [...experiments]
+			.filter((exp) => !exp.error && Number.isFinite(exp.valBpb))
+			.sort((a, b) => {
+				const aTime = a.createdAt ? Date.parse(a.createdAt) : NaN;
+				const bTime = b.createdAt ? Date.parse(b.createdAt) : NaN;
+				return (
+					a.valBpb - b.valBpb ||
+					(Number.isFinite(bTime) ? bTime : b.id) - (Number.isFinite(aTime) ? aTime : a.id) ||
+					b.id - a.id
+				);
+			})[0];
+		if (bestExperiment) {
+			controller.bestCode = bestExperiment.code;
+			controller.bestBpb = bestExperiment.valBpb;
+		} else {
+			const best = await getBestExperiment();
+			if (best) {
+				controller.bestCode = best.code;
+				controller.bestBpb = best.val_bpb;
+			}
 		}
 
 		await controller.run(trainLoader, valLoader, {
@@ -846,7 +899,7 @@
 										{waitingForRecommendation ? 'thinking' : 'running'}
 									</span>
 									<span class="text-gray-200">
-										{waitingForRecommendation ? 'Claude writing code...' : currentRunName || 'training...'}
+										{waitingForRecommendation ? `${activeResearchLabel} writing code...` : currentRunName || 'training...'}
 									</span>
 								</div>
 								{#if currentReasoning && !waitingForRecommendation}
@@ -888,16 +941,66 @@
 						<div class="flex-1 min-h-0 p-3">
 							{#if workspaceTab === 'chart'}
 								<div class="h-full flex flex-col gap-3">
-									<div class="flex items-center justify-between">
-										<h2 class="text-xs font-mono text-gray-400">loss</h2>
-										{#if selectedExp}
-											<span class="text-[10px] font-mono text-gray-500 tabular-nums">
-												{selectedExp.totalSteps} steps · {(selectedExp.elapsed / 1000).toFixed(1)}s
-											</span>
-										{/if}
+									<div class="flex flex-col gap-2 xl:flex-row xl:items-start xl:justify-between">
+										<div>
+											<h2 class="text-xs font-mono text-gray-400">loss</h2>
+											{#if selectedExp}
+												<span class="text-[10px] font-mono text-gray-500 tabular-nums">
+													{selectedExp.totalSteps} steps · {(selectedExp.elapsed / 1000).toFixed(1)}s
+												</span>
+											{/if}
+										</div>
+										<div class="flex flex-wrap items-center gap-2 text-[10px] font-mono text-gray-400">
+											<select
+												bind:value={chartSeriesMode}
+												disabled={!canFocusChart}
+												class="rounded border border-gray-800 bg-black/40 px-2 py-1 disabled:opacity-40"
+												title="chart series view"
+											>
+												<option value="all">view: all runs</option>
+												<option value="focus">view: focus selected</option>
+											</select>
+											<select
+												bind:value={chartScaleMode}
+												class="rounded border border-gray-800 bg-black/40 px-2 py-1"
+												title="chart y-axis scaling"
+											>
+												<option value="fit">y: fit all</option>
+												<option value="trim">y: trim outliers</option>
+												<option value="manual">y: manual range</option>
+											</select>
+											{#if chartScaleMode === 'manual'}
+												<input
+													type="number"
+													step="0.01"
+													bind:value={chartYMinInput}
+													placeholder="y min"
+													class="w-20 rounded border border-gray-800 bg-black/40 px-2 py-1 text-right tabular-nums"
+													title="manual minimum y-axis value"
+												/>
+												<input
+													type="number"
+													step="0.01"
+													bind:value={chartYMaxInput}
+													placeholder="y max"
+													class="w-20 rounded border border-gray-800 bg-black/40 px-2 py-1 text-right tabular-nums"
+													title="manual maximum y-axis value"
+												/>
+												{#if !chartManualRangeValid}
+													<span class="text-amber-300">enter y-max greater than y-min</span>
+												{/if}
+											{/if}
+										</div>
 									</div>
 									<div class="flex-1 min-h-0 rounded border border-gray-800 bg-black/20 p-3">
-										<LossChart data={lossData} pastRuns={pastLossRuns} />
+										<LossChart
+											data={lossData}
+											pastRuns={pastLossRuns}
+											seriesMode={chartSeriesMode}
+											yScaleMode={chartScaleMode}
+											yMin={chartYMin}
+											yMax={chartYMax}
+										/>
 									</div>
 								</div>
 							{:else if workspaceTab === 'code'}

@@ -31,9 +31,19 @@
 						b.id - a.id
 				);
 			case 'newest':
-				return items.sort((a, b) => b.id - a.id);
+				return items.sort((a, b) => {
+					const aTime = a.createdAt ? Date.parse(a.createdAt) : NaN;
+					const bTime = b.createdAt ? Date.parse(b.createdAt) : NaN;
+					const byTime = (Number.isFinite(bTime) ? bTime : b.id) - (Number.isFinite(aTime) ? aTime : a.id);
+					return byTime || b.id - a.id;
+				});
 			case 'oldest':
-				return items.sort((a, b) => a.id - b.id);
+				return items.sort((a, b) => {
+					const aTime = a.createdAt ? Date.parse(a.createdAt) : NaN;
+					const bTime = b.createdAt ? Date.parse(b.createdAt) : NaN;
+					const byTime = (Number.isFinite(aTime) ? aTime : a.id) - (Number.isFinite(bTime) ? bTime : b.id);
+					return byTime || a.id - b.id;
+				});
 			case 'steps':
 				return items.sort((a, b) => b.totalSteps - a.totalSteps || a.valBpb - b.valBpb);
 			case 'bpb':
@@ -87,7 +97,7 @@
 			{#if exp.id === -1}
 				<span class="text-center text-red-400 animate-pulse" title="in progress">*</span>
 			{:else}
-				<span class="text-center {exp.source === 'auto' ? 'text-blue-400' : 'text-gray-500'}" title={exp.source === 'auto' ? 'auto (Claude)' : 'manual'}>
+				<span class="text-center {exp.source === 'auto' ? 'text-blue-400' : 'text-gray-500'}" title={exp.source === 'auto' ? 'automatic experiment' : 'manual experiment'}>
 					{exp.source === 'auto' ? 'A' : 'M'}
 				</span>
 			{/if}

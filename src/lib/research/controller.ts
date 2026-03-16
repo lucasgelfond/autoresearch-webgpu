@@ -59,7 +59,7 @@ export class ResearchController {
 		while (!this.stopRequested) {
 			const proposal = await this.getNextCode(callbacks);
 			if (!proposal) {
-				callbacks.onError?.(this.lastError || 'Failed to get next code from Claude.');
+				callbacks.onError?.(this.lastError || 'Failed to get next code from the research backend.');
 				break;
 			}
 			await this.runExperiment(
@@ -169,7 +169,7 @@ export class ResearchController {
 			// Parse SSE stream from Anthropic
 			const fullText = await this.consumeStream(response, callbacks);
 			if (!fullText) {
-				this.lastError = 'Empty response from Claude';
+				this.lastError = 'Empty response from the research backend';
 				return null;
 			}
 
@@ -276,7 +276,7 @@ export class ResearchController {
 
 	private parseResponse(text: string): { code: string; reasoning: string } | null {
 		const result = parseClaudeResponse(text);
-		if (!result) this.lastError = 'Could not parse Claude response';
+		if (!result) this.lastError = 'Could not parse research backend response';
 		return result;
 	}
 }

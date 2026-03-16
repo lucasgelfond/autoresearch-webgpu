@@ -15,6 +15,39 @@ export type ExperimentRecord = {
 	createdAt?: string;
 };
 
+function experimentTimeValue(exp: ExperimentRecord): number {
+	if (!exp.createdAt) return exp.id;
+	const parsed = Date.parse(exp.createdAt);
+	return Number.isFinite(parsed) ? parsed : exp.id;
+}
+
+function compareNewestFirst(a: ExperimentRecord, b: ExperimentRecord): number {
+	return experimentTimeValue(b) - experimentTimeValue(a) || b.id - a.id;
+}
+
+function compareBestFirst(a: ExperimentRecord, b: ExperimentRecord): number {
+	return a.valBpb - b.valBpb || compareNewestFirst(a, b);
+}
+
+function formatValBpb(value: number): string {
+	return Number.isFinite(value) ? value.toFixed(4) : 'Infinity';
+}
+
+function summarizeExperiment(exp: ExperimentRecord): string {
+	const badge = exp.kept ? 'KEPT' : 'DISCARDED';
+	let msg = `#${exp.id} [${badge}] val_bpb=${formatValBpb(exp.valBpb)} (${exp.totalSteps} steps, ${(exp.elapsed / 1000).toFixed(1)}s)`;
+	if (exp.rerunOf) {
+		msg += ` [rerun of #${exp.rerunOf}]`;
+	}
+	if (exp.reasoning) {
+		msg += `\n  ${exp.reasoning}`;
+	}
+	if (exp.error) {
+		msg += `\n  ERROR: ${exp.error}`;
+	}
+	return msg;
+}
+
 /**
  * System prompt with jax-js API reference.
  * This is large (~3k tokens) and should be cached via Anthropic prompt caching.
@@ -114,17 +147,31 @@ export function buildUserPrompt(
 	bestCode: string,
 	bestBpb: number
 ): string {
-	let msg = `Current best code (val_bpb = ${bestBpb.toFixed(4)}):\n`;
+	let msg = `Current best code (val_bpb = ${formatValBpb(bestBpb)}):\n`;
 	msg += '```\n' + bestCode + '\n```\n\n';
 
 	if (history.length > 0) {
-		msg += 'Experiment history (most recent first):\n';
-		const recent = history.slice(-10).reverse();
+		const valid = history.filter((exp) => !exp.error && Number.isFinite(exp.valBpb));
+		const bestByCode = new Map<string, ExperimentRecord>();
+		for (const exp of [...valid].sort(compareBestFirst)) {
+			if (!bestByCode.has(exp.code)) {
+				bestByCode.set(exp.code, exp);
+			}
+		}
+
+		const topPerformers = [...bestByCode.values()].sort(compareBestFirst).slice(0, 5);
+		if (topPerformers.length > 0) {
+			msg += 'Top performers (best unique code first):\n';
+			for (const exp of topPerformers) {
+				msg += `\n${summarizeExperiment(exp)}`;
+			}
+			msg += '\n\n';
+		}
+
+		msg += 'Recent experiment activity (newest first by created_at):\n';
+		const recent = [...history].sort(compareNewestFirst).slice(0, 10);
 		for (const exp of recent) {
-			const badge = exp.kept ? 'KEPT' : 'DISCARDED';
-			msg += `\n#${exp.id} [${badge}] val_bpb=${exp.valBpb.toFixed(4)} (${exp.totalSteps} steps, ${(exp.elapsed / 1000).toFixed(1)}s)`;
-			msg += `\n  ${exp.reasoning}`;
-			if (exp.error) msg += `\n  ERROR: ${exp.error}`;
+			msg += `\n${summarizeExperiment(exp)}`;
 		}
 		msg += '\n';
 	}

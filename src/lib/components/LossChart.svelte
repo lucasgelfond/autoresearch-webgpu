@@ -2,9 +2,25 @@
 	type Point = { step: number; loss: number };
 	type Series = { data: Point[]; color: string; label?: string; highlight?: boolean };
 
-	let { data, pastRuns = [] }: { data: Point[]; pastRuns?: Series[] } = $props();
+	let {
+		data,
+		pastRuns = [],
+		seriesMode = 'all',
+		yScaleMode = 'fit',
+		yMin = null,
+		yMax = null
+	}: {
+		data: Point[];
+		pastRuns?: Series[];
+		seriesMode?: 'all' | 'focus';
+		yScaleMode?: 'fit' | 'trim' | 'manual';
+		yMin?: number | null;
+		yMax?: number | null;
+	} = $props();
 
+	let container: HTMLDivElement;
 	let canvas: HTMLCanvasElement;
+	let size = $state({ width: 0, height: 0 });
 
 	const COLORS = ['#6b7280', '#4b5563', '#374151', '#9ca3af', '#6b7280'];
 
@@ -25,21 +41,110 @@
 		return ticks;
 	}
 
-	$effect(() => {
-		if (!canvas) return;
+	function quantile(sorted: number[], q: number): number {
+		if (sorted.length === 0) return 0;
+		if (sorted.length === 1) return sorted[0];
+		const idx = (sorted.length - 1) * q;
+		const lo = Math.floor(idx);
+		const hi = Math.ceil(idx);
+		const t = idx - lo;
+		return sorted[lo] * (1 - t) + sorted[hi] * t;
+	}
 
-		const allSeries: Series[] = [
+	function resolveYDomain(losses: number[]) {
+		if (losses.length === 0) return null;
+
+		const sorted = [...losses].sort((a, b) => a - b);
+		const minLoss = sorted[0];
+		const maxLoss = sorted[sorted.length - 1];
+
+		if (yScaleMode === 'manual' && yMin != null && yMax != null && isFinite(yMin) && isFinite(yMax) && yMax > yMin) {
+			return { min: yMin, max: yMax };
+		}
+
+		let domainMin = minLoss;
+		let domainMax = maxLoss;
+
+		if (yScaleMode === 'trim' && sorted.length >= 4) {
+			const q1 = quantile(sorted, 0.25);
+			const q3 = quantile(sorted, 0.75);
+			const iqr = q3 - q1;
+			if (iqr > 0) {
+				domainMin = Math.max(minLoss, q1 - 1.5 * iqr);
+				domainMax = Math.min(maxLoss, q3 + 1.5 * iqr);
+			}
+		}
+
+		if (!(domainMax > domainMin)) {
+			const center = domainMin;
+			return { min: center - 0.5, max: center + 0.5 };
+		}
+
+		const pad = (domainMax - domainMin) * 0.05;
+		return { min: domainMin - pad, max: domainMax + pad };
+	}
+
+	function drawSeries(
+		ctx: CanvasRenderingContext2D,
+		points: Point[],
+		xScale: (step: number) => number,
+		yScale: (loss: number) => number
+	) {
+		let drawing = false;
+		for (const point of points) {
+			if (!isFinite(point.loss)) {
+				drawing = false;
+				continue;
+			}
+			const x = xScale(point.step);
+			const y = yScale(point.loss);
+			if (!drawing) {
+				ctx.moveTo(x, y);
+				drawing = true;
+			} else {
+				ctx.lineTo(x, y);
+			}
+		}
+	}
+
+	function updateSize() {
+		if (!container) return;
+		const next = {
+			width: container.clientWidth,
+			height: container.clientHeight
+		};
+		if (next.width !== size.width || next.height !== size.height) {
+			size = next;
+		}
+	}
+
+	$effect(() => {
+		if (!container) return;
+		updateSize();
+		const observer = new ResizeObserver(() => updateSize());
+		observer.observe(container);
+		return () => observer.disconnect();
+	});
+
+	$effect(() => {
+		if (!canvas || size.width === 0 || size.height === 0) return;
+
+		const baseSeries: Series[] = [
 			...pastRuns.map((r, i) => ({ ...r, color: r.color || COLORS[i % COLORS.length] })),
 			...(data.length >= 2 ? [{ data, color: '#3b82f6', label: 'current' }] : [])
 		];
+		const allSeries =
+			seriesMode === 'focus'
+				? baseSeries.filter((series) => series.label === 'current' || series.highlight)
+				: baseSeries;
 
 		const ctx = canvas.getContext('2d')!;
 		const dpr = window.devicePixelRatio || 1;
-		const w = canvas.clientWidth;
-		const h = canvas.clientHeight;
+		const w = size.width;
+		const h = size.height;
 		canvas.width = w * dpr;
 		canvas.height = h * dpr;
-		ctx.scale(dpr, dpr);
+		ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 		ctx.clearRect(0, 0, w, h);
 
 		if (allSeries.length === 0 || allSeries.every(s => s.data.length < 2)) {
@@ -61,20 +166,20 @@
 
 		const minStep = Math.min(...allSteps);
 		const maxStep = Math.max(...allSteps);
-		const minLoss = Math.min(...allLosses);
-		const maxLoss = Math.max(...allLosses);
-		const lossRange = maxLoss - minLoss || 1;
+		const yDomain = resolveYDomain(allLosses);
+		if (!yDomain) return;
+		const lossRange = yDomain.max - yDomain.min || 1;
 		const stepRange = maxStep - minStep || 1;
 
 		const xScale = (step: number) => pad.left + ((step - minStep) / stepRange) * plotW;
-		const yScale = (loss: number) => pad.top + (1 - (loss - minLoss) / lossRange) * plotH;
+		const yScale = (loss: number) => pad.top + (1 - (loss - yDomain.min) / lossRange) * plotH;
 
 		// Gridlines
 		ctx.textAlign = 'right';
 		ctx.textBaseline = 'middle';
 		ctx.font = '10px monospace';
 
-		const yTicks = niceSteps(minLoss, maxLoss, 5);
+		const yTicks = niceSteps(yDomain.min, yDomain.max, 5);
 		for (const v of yTicks) {
 			const y = yScale(v);
 			if (y < pad.top - 1 || y > h - pad.bottom + 1) continue;
@@ -128,19 +233,14 @@
 			ctx.lineWidth = isCurrent ? 1.5 : isHighlight ? 2 : 1;
 			ctx.globalAlpha = isCurrent ? 1 : isHighlight ? 1 : 0.25;
 			ctx.beginPath();
-			for (let i = 0; i < s.data.length; i++) {
-				const x = xScale(s.data[i].step);
-				const y = yScale(s.data[i].loss);
-				if (i === 0) ctx.moveTo(x, y);
-				else ctx.lineTo(x, y);
-			}
+			drawSeries(ctx, s.data, xScale, yScale);
 			ctx.stroke();
 			ctx.globalAlpha = 1;
 		}
 	});
 </script>
 
-<div class="relative w-full h-full">
+<div bind:this={container} class="relative w-full h-full">
 	{#if data.length < 2 && pastRuns.length === 0}
 		<div class="absolute inset-0 flex items-center justify-center text-gray-500 text-sm font-mono">
 			waiting for data...
