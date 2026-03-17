@@ -39,11 +39,14 @@ export async function executeTrainCode(
 		callbacks.onStep(m);
 	};
 
-	const { promise, resolve, reject } = Promise.withResolvers<RunResult>();
+	let resolveResult: ((result: RunResult) => void) | null = null;
+	const resultPromise = new Promise<RunResult>((resolve) => {
+		resolveResult = resolve;
+	});
 
 	const onReturn = (r: TrainResult & { valBpb?: number }) => {
 		resolved = true;
-		resolve({
+		resolveResult?.({
 			valBpb: r.valBpb ?? Infinity,
 			totalSteps: lastStep,
 			elapsed: lastElapsed,
@@ -55,11 +58,30 @@ export async function executeTrainCode(
 		});
 	};
 
-	// Timeout: 2x the training budget (minimum 30s for model init/inference rebuild)
-	const timeoutMs = Math.max(trainSeconds * 2000, 30000);
-	const timeout = setTimeout(() => {
-		if (!resolved) reject(new Error(`Training exceeded ${timeoutMs / 1000}s timeout`));
-	}, timeoutMs);
+	const runCallbacks: {
+		trainData: DataLoader;
+		valData: DataLoader;
+		trainSeconds: number;
+		signal: AbortSignal;
+		onStep: typeof onStep;
+		onReturn: (r: TrainResult & { valBpb?: number }) => void;
+	} = {
+		trainData,
+		valData,
+		trainSeconds,
+		signal: callbacks.signal,
+		onStep,
+		onReturn,
+	};
+
+	let timeoutId: ReturnType<typeof setTimeout> | null = null;
+	const timeoutPromise = new Promise<never>((_, reject) => {
+		// Timeout: 2x the training budget (minimum 30s for model init/inference rebuild)
+		const timeoutMs = Math.max(trainSeconds * 2000, 30000);
+		timeoutId = setTimeout(() => {
+			reject(new Error(`Training exceeded ${timeoutMs / 1000}s timeout`));
+		});
+	});
 
 	try {
 		// Build the function body with all globals destructured
@@ -78,19 +100,22 @@ export async function executeTrainCode(
 			`
 		);
 
-		trainData.reset();
-		await fn(prepare, {
-			trainData,
-			valData,
-			trainSeconds,
-			signal: callbacks.signal,
-			onStep,
-			onReturn,
-		});
+		const runPromise = (async () => {
+			trainData.reset();
+			await fn(prepare, runCallbacks);
+			if (!resolved) {
+				throw new Error(
+					callbacks.signal.aborted
+						? 'Training aborted before returning a result'
+						: 'Training completed without calling onReturn'
+				);
+			}
+			return resultPromise;
+		})();
+
+		return await Promise.race([runPromise, resultPromise, timeoutPromise]);
 	} catch (e) {
-		clearTimeout(timeout);
 		const msg = e instanceof Error ? e.message : String(e);
-		// If onReturn was never called, resolve with error
 		return {
 			valBpb: Infinity,
 			totalSteps: lastStep,
@@ -102,8 +127,9 @@ export async function executeTrainCode(
 			seqLen: 128,
 			error: msg,
 		};
+	} finally {
+		if (timeoutId !== null) {
+			clearTimeout(timeoutId);
+		}
 	}
-	clearTimeout(timeout);
-
-	return promise;
 }
