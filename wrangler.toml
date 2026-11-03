@@ -10,8 +10,3 @@ routes = [
 directory = ".svelte-kit/cloudflare"
 binding = "ASSETS"
 
-[[unsafe.bindings]]
-name = "RATE_LIMITER"
-type = "ratelimit"
-namespace_id = "0"
-simple = { limit = 1, period = 10 }

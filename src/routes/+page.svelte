@@ -18,6 +18,14 @@
 	import CodeEditor from '$lib/components/CodeEditor.svelte';
 	import Leaderboard from '$lib/components/Leaderboard.svelte';
 	import { petname } from '$lib/petname';
+	import type { ResearchProvider } from '$lib/research/providers/types';
+	import { MockProvider } from '$lib/research/providers/mock';
+
+	const MODEL_OPTIONS = {
+		'4b': { id: 'onnx-community/Qwen3.5-4B-ONNX', label: 'Qwen3.5 4B (~2.5 GB)' },
+		mock: { id: null, label: 'mock (no model)' }
+	} as const;
+	type ModelChoice = keyof typeof MODEL_OPTIONS;
 
 	let gpuStatus = $state<WebGPUStatus | null>(null);
 	let code = $state(BASELINE_CODE);
@@ -42,6 +50,14 @@
 	let trainAbort: AbortController | null = null;
 	let inProgressExp = $state<ExperimentRecord | null>(null);
 	let waitingForRecommendation = $state(false);
+
+	let webgpuAvailable = $state<boolean | null>(null);
+	let modelChoice = $state<ModelChoice>('4b');
+	let loadedChoice = $state<ModelChoice | null>(null);
+	let modelLoading = $state(false);
+	let modelProgress = $state('');
+	let provider: ResearchProvider | null = null;
+	let modelReady = $derived(loadedChoice === modelChoice);
 
 	// In-memory loaded model state for inference
 	type LoadedModel = { forward: ForwardFn; params: Params; vocabSize: number; seqLen: number; expId: number };
@@ -69,6 +85,8 @@
 		try {
 			status = 'initializing';
 			await getDb();
+			const { isWebGpuAvailable } = await import('$lib/research/providers/webgpu');
+			webgpuAvailable = await isWebGpuAvailable();
 			gpuStatus = await initWebGPU();
 			if (!gpuStatus.ok) { status = 'error'; return; }
 			status = 'loading data...';
@@ -96,6 +114,36 @@
 		const best = await getBestExperiment();
 		if (best) {
 			code = best.code;
+		}
+	}
+
+	async function loadResearchModel() {
+		if (modelLoading) return;
+		const choice = modelChoice;
+		const { id } = MODEL_OPTIONS[choice];
+		const { WebGpuProvider } = await import('$lib/research/providers/webgpu');
+		modelLoading = true;
+		modelProgress = '';
+		if (provider instanceof WebGpuProvider) await provider.dispose();
+		provider = null;
+		loadedChoice = null;
+		try {
+			if (id === null) {
+				provider = new MockProvider();
+			} else {
+				const next = new WebGpuProvider(id);
+				await next.load((info) => {
+					if (info.status === 'progress_total') modelProgress = `${Math.round(info.progress)}%`;
+				});
+				provider = next;
+			}
+			loadedChoice = choice;
+			controller?.setProvider(provider);
+		} catch (e) {
+			console.error('Model load failed:', e);
+			modelProgress = `failed: ${e instanceof Error ? e.message : e}`;
+		} finally {
+			modelLoading = false;
 		}
 	}
 
@@ -189,13 +237,15 @@
 	}
 
 	async function startResearch() {
-		if (!trainLoader || !valLoader || running) return;
+		if (!trainLoader || !valLoader || running || modelLoading) return;
+		if (!modelReady) await loadResearchModel();
+		if (!provider || !modelReady) return;
 
 		running = true;
 		waitingForRecommendation = true;
 		lossData = [];
 		status = 'starting...';
-		controller = new ResearchController();
+		controller = new ResearchController(provider);
 		setListMode('current');
 
 		const best = await getBestExperiment();
@@ -243,6 +293,7 @@
 				status = `thinking: ${streamedReasoning}`;
 			},
 			onError(error) {
+				console.error('Research stopped:', error);
 				status = `error: ${error}`;
 			}
 		});
@@ -379,16 +430,49 @@
 	let isFirstLoad = $derived(experiments.length === 0 && !running && status !== 'error');
 </script>
 
+{#snippet modelPicker()}
+	<div class="flex items-center gap-2 font-mono text-xs">
+		<select
+			bind:value={modelChoice}
+			disabled={modelLoading || running || webgpuAvailable === false}
+			class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-200 disabled:opacity-40"
+		>
+			{#each Object.entries(MODEL_OPTIONS) as [key, opt]}
+				<option value={key}>{opt.label}</option>
+			{/each}
+		</select>
+		<button
+			onclick={loadResearchModel}
+			disabled={modelLoading || running || modelReady || webgpuAvailable === false}
+			class="rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 px-2.5 py-1 text-gray-200 transition-colors"
+		>
+			{#if webgpuAvailable === false}
+				WebGPU not available in this browser
+			{:else if modelLoading}
+				downloading {modelProgress}
+			{:else if modelReady}
+				ready
+			{:else}
+				download
+			{/if}
+		</button>
+		{#if modelProgress.startsWith('failed')}
+			<span class="text-red-400 truncate" title={modelProgress}>{modelProgress}</span>
+		{/if}
+	</div>
+{/snippet}
+
+
 <svelte:head>
 	<title>autoresearch, in the browser!</title>
-	<meta name="description" content="Train small language models in your browser using WebGPU. Claude writes the training code, runs experiments, and iterates — a model training another model!" />
+	<meta name="description" content="Train small language models in your browser using WebGPU. A local model writes the training code, runs experiments, and iterates — a model training another model!" />
 	<meta property="og:title" content="autoresearch, in the browser!" />
-	<meta property="og:description" content="Train small language models in your browser using WebGPU. Claude writes the training code, runs experiments, and iterates." />
+	<meta property="og:description" content="Train small language models in your browser using WebGPU. A local model writes the training code, runs experiments, and iterates." />
 	<meta property="og:image" content="https://autoresearch.lucasgelfond.online/demo.gif" />
 	<meta property="og:type" content="website" />
 	<meta name="twitter:card" content="summary_large_image" />
 	<meta name="twitter:title" content="autoresearch, in the browser!" />
-	<meta name="twitter:description" content="Train small language models in your browser using WebGPU. Claude writes the training code and iterates." />
+	<meta name="twitter:description" content="Train small language models in your browser using WebGPU. A local model writes the training code and iterates." />
 	<meta name="twitter:image" content="https://autoresearch.lucasgelfond.online/demo.gif" />
 </svelte:head>
 
@@ -412,6 +496,9 @@
 				Based on Andrej Karpathy's <a href="https://github.com/karpathy/autoresearch" class="underline hover:text-gray-200">autoresearch</a> and built on <a href="https://www.ekzhang.com/" class="underline hover:text-gray-200">Eric Zhang</a>'s <a href="https://github.com/ekzhang/jax-js" class="underline hover:text-gray-200">jax-js</a>. Built by <a href="https://lucasgelfond.online" class="underline hover:text-gray-200">Lucas Gelfond</a>. Source <a href="https://github.com/lucasgelfond/autoresearch-webgpu" class="underline hover:text-gray-200">here</a>.
 			</p>
 		</div>
+		{#if status !== 'error'}
+			{@render modelPicker()}
+		{/if}
 		{#if status === 'error'}
 			<div class="rounded border border-red-800 bg-red-950 p-4 font-mono text-sm text-red-400 mt-4">
 				something went wrong during initialization. check the console for details.
@@ -426,7 +513,7 @@
 					start research
 				</button>
 				<p class="text-xs font-mono text-gray-500 max-w-sm text-center">
-					Claude will write training code, run it in your browser, and iterate to find better models.
+					A local model will write training code, run it in your browser, and iterate to find better models.
 				</p>
 			{:else}
 				<p class="text-sm font-mono text-gray-500">{status === 'initializing' ? 'initializing...' : status}</p>
@@ -525,7 +612,7 @@
 								{waitingForRecommendation ? 'thinking' : 'running'}
 							</span>
 							<span class="text-gray-200">
-								{waitingForRecommendation ? 'Claude writing code...' : currentRunName || 'training...'}
+								{waitingForRecommendation ? 'writing code...' : currentRunName || 'training...'}
 							</span>
 						</div>
 						{#if currentReasoning && !waitingForRecommendation}
@@ -534,6 +621,9 @@
 						<p class="text-[11px] text-gray-500 font-mono">{status}</p>
 					{:else}
 						<h2 class="text-xs font-mono text-gray-400">loss</h2>
+						{#if status.startsWith('error')}
+							<p class="text-[11px] text-red-400 font-mono line-clamp-2" title={status}>{status}</p>
+						{/if}
 					{/if}
 					<div class="h-44 shrink-0">
 						<LossChart data={lossData} pastRuns={pastLossRuns} />

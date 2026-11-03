@@ -6,7 +6,8 @@ import { insertExperiment, insertLossCurve, updateWeightsPath } from '../db';
 import { saveWeights } from '../weights';
 import { buildSystemPrompt, buildUserPrompt, type ExperimentRecord } from './prompt';
 import { BASELINE_CODE } from './baseline';
-import { parseClaudeResponse } from './parse';
+import { parseResponse, extractPartial } from './parse';
+import type { ResearchProvider } from './providers/types';
 
 export type ResearchCallbacks = {
 	onExperimentStart?: (code: string, reasoning: string) => void;
@@ -26,11 +27,17 @@ export class ResearchController {
 	trainSeconds = 30;
 	private stopRequested = false;
 	private runAbort: AbortController | null = null;
-	private fetchAbort: AbortController | null = null;
+	private generateAbort: AbortController | null = null;
+
+	constructor(private provider: ResearchProvider) {}
+
+	setProvider(provider: ResearchProvider) {
+		this.provider = provider;
+	}
 
 	stop() {
 		this.stopRequested = true;
-		this.fetchAbort?.abort();
+		this.generateAbort?.abort();
 		this.runAbort?.abort();
 	}
 
@@ -57,7 +64,7 @@ export class ResearchController {
 		while (!this.stopRequested) {
 			const proposal = await this.getNextCode(callbacks);
 			if (!proposal) {
-				callbacks.onError?.(this.lastError || 'Failed to get next code from Claude.');
+				callbacks.onError?.(this.lastError || 'Failed to get next code from the model.');
 				break;
 			}
 			await this.runExperiment(
@@ -141,135 +148,52 @@ export class ResearchController {
 	}
 
 	private async getNextCode(callbacks: ResearchCallbacks): Promise<{ code: string; reasoning: string } | null> {
+		// Greedy first; small models sometimes repeat a past experiment or emit unparseable
+		// output, so retry with sampling before giving up.
+		for (const temperature of [0, 0.7, 0.7]) {
+			if (this.stopRequested) return null;
+			const proposal = await this.propose(callbacks, temperature);
+			if (proposal && !this.history.some((e) => e.code === proposal.code)) return proposal;
+			if (proposal) this.lastError = 'Model repeated a previous experiment';
+		}
+		return null;
+	}
+
+	private async propose(callbacks: ResearchCallbacks, temperature: number): Promise<{ code: string; reasoning: string } | null> {
 		const systemPrompt = buildSystemPrompt();
 		const userPrompt = buildUserPrompt(this.history, this.bestCode, this.bestBpb);
 
-		this.fetchAbort = new AbortController();
+		this.generateAbort = new AbortController();
+		let fullText = '';
 		try {
-			const response = await fetch('/api/research', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ systemPrompt, userPrompt, stream: true }),
-				signal: this.fetchAbort.signal
+			await this.provider.generate({
+				systemPrompt,
+				userPrompt,
+				temperature,
+				signal: this.generateAbort.signal,
+				onToken: (chunk) => {
+					fullText += chunk;
+					const extracted = extractPartial(fullText);
+					if (extracted.code) callbacks.onCodeStream?.(extracted.code);
+					if (extracted.reasoning) callbacks.onReasoningStream?.(extracted.reasoning);
+				}
 			});
-
-			if (!response.ok) {
-				const err = await response.text();
-				this.lastError = `API ${response.status}: ${err.slice(0, 200)}`;
-				return null;
-			}
-
-			// Parse SSE stream from Anthropic
-			const fullText = await this.consumeStream(response, callbacks);
-			if (!fullText) {
-				this.lastError = 'Empty response from Claude';
-				return null;
-			}
-
-			return this.parseResponse(fullText);
 		} catch (e) {
-			if (this.stopRequested) return null;
-			this.lastError = `Fetch failed: ${e}`;
+			if (!this.stopRequested) this.lastError = `Generation failed: ${e}`;
 			return null;
 		} finally {
-			this.fetchAbort = null;
-		}
-	}
-
-	private async consumeStream(response: Response, callbacks: ResearchCallbacks): Promise<string> {
-		const reader = response.body!.getReader();
-		const decoder = new TextDecoder();
-		let fullText = '';
-		let buffer = '';
-
-		while (true) {
-			const { done, value } = await reader.read();
-			if (done) break;
-
-			buffer += decoder.decode(value, { stream: true });
-			const lines = buffer.split('\n');
-			buffer = lines.pop() || '';
-
-			for (const line of lines) {
-				if (!line.startsWith('data: ')) continue;
-				const data = line.slice(6);
-				if (data === '[DONE]') continue;
-
-				try {
-					const event = JSON.parse(data);
-					if (event.type === 'content_block_delta' && event.delta?.text) {
-						const chunk = event.delta.text;
-						fullText += chunk;
-
-						// Try to extract streaming code from the partial JSON
-						const extracted = this.extractStreamingCode(fullText);
-						if (extracted.code) {
-							callbacks.onCodeStream?.(extracted.code);
-						}
-						if (extracted.reasoning) {
-							callbacks.onReasoningStream?.(extracted.reasoning);
-						}
-					}
-				} catch {}
-			}
+			this.generateAbort = null;
 		}
 
-		return fullText;
-	}
-
-	/** Try to extract code and reasoning from partial JSON as it streams in. */
-	private extractStreamingCode(partial: string): { code?: string; reasoning?: string } {
-		const result: { code?: string; reasoning?: string } = {};
-
-		// Try to find reasoning field
-		const reasoningMatch = partial.match(/"reasoning"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-		if (reasoningMatch) {
-			try { result.reasoning = JSON.parse('"' + reasoningMatch[1] + '"'); } catch {}
+		if (!fullText) {
+			this.lastError = 'Empty response from model';
+			return null;
 		}
-
-		// Try to find code field — it may be incomplete
-		const codeStart = partial.indexOf('"code"');
-		if (codeStart === -1) return result;
-
-		// Find the opening quote of the code value
-		const colonAfterCode = partial.indexOf(':', codeStart + 6);
-		if (colonAfterCode === -1) return result;
-
-		const quoteStart = partial.indexOf('"', colonAfterCode);
-		if (quoteStart === -1) return result;
-
-		// Extract the code value, handling escaped characters
-		// Walk through the string handling escapes
-		let code = '';
-		let i = quoteStart + 1;
-		while (i < partial.length) {
-			if (partial[i] === '\\' && i + 1 < partial.length) {
-				const next = partial[i + 1];
-				if (next === '"') { code += '"'; i += 2; }
-				else if (next === '\\') { code += '\\'; i += 2; }
-				else if (next === 'n') { code += '\n'; i += 2; }
-				else if (next === 't') { code += '\t'; i += 2; }
-				else if (next === 'r') { code += '\r'; i += 2; }
-				else { code += partial[i]; i++; }
-			} else if (partial[i] === '"') {
-				// End of string
-				break;
-			} else {
-				code += partial[i];
-				i++;
-			}
+		const result = parseResponse(fullText);
+		if (!result) {
+			this.lastError = 'Could not parse model response';
+			console.warn('Unparseable model response:', fullText);
 		}
-
-		if (code.length > 0) {
-			result.code = code;
-		}
-
-		return result;
-	}
-
-	private parseResponse(text: string): { code: string; reasoning: string } | null {
-		const result = parseClaudeResponse(text);
-		if (!result) this.lastError = 'Could not parse Claude response';
 		return result;
 	}
 }

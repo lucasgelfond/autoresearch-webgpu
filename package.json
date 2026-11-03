@@ -28,6 +28,7 @@
     "@codemirror/theme-one-dark": "^6.1.3",
     "@codemirror/view": "^6.40.0",
     "@electric-sql/pglite": "^0.3.16",
+    "@huggingface/transformers": "4.3.1",
     "@jax-js/jax": "^0.1.0",
     "@jax-js/loaders": "^0.1.1",
     "@jax-js/optax": "^0.1.0",

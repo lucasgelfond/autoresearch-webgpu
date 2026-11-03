@@ -31,7 +31,6 @@ export async function executeTrainCode(
 
 	let lastStep = 0;
 	let lastElapsed = 0;
-	let resolved = false;
 
 	const onStep = (m: StepMetrics) => {
 		lastStep = m.step;
@@ -39,10 +38,9 @@ export async function executeTrainCode(
 		callbacks.onStep(m);
 	};
 
-	const { promise, resolve, reject } = Promise.withResolvers<RunResult>();
+	const { promise, resolve } = Promise.withResolvers<RunResult>();
 
 	const onReturn = (r: TrainResult & { valBpb?: number }) => {
-		resolved = true;
 		resolve({
 			valBpb: r.valBpb ?? Infinity,
 			totalSteps: lastStep,
@@ -55,11 +53,17 @@ export async function executeTrainCode(
 		});
 	};
 
-	// Timeout: 2x the training budget (minimum 30s for model init/inference rebuild)
+	// Timeout: 2x the training budget (minimum 30s for model init/inference rebuild).
+	// Races the run so hung code or a missing onReturn fails the experiment instead of the loop.
 	const timeoutMs = Math.max(trainSeconds * 2000, 30000);
-	const timeout = setTimeout(() => {
-		if (!resolved) reject(new Error(`Training exceeded ${timeoutMs / 1000}s timeout`));
-	}, timeoutMs);
+	const timeoutAbort = new AbortController();
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timedOut = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => {
+			timeoutAbort.abort();
+			reject(new Error(`Training exceeded ${timeoutMs / 1000}s timeout`));
+		}, timeoutMs);
+	});
 
 	try {
 		// Build the function body with all globals destructured
@@ -79,18 +83,20 @@ export async function executeTrainCode(
 		);
 
 		trainData.reset();
-		await fn(prepare, {
-			trainData,
-			valData,
-			trainSeconds,
-			signal: callbacks.signal,
-			onStep,
-			onReturn,
-		});
+		await Promise.race([
+			fn(prepare, {
+				trainData,
+				valData,
+				trainSeconds,
+				signal: AbortSignal.any([callbacks.signal, timeoutAbort.signal]),
+				onStep,
+				onReturn,
+			}),
+			timedOut
+		]);
+		return await Promise.race([promise, timedOut]);
 	} catch (e) {
-		clearTimeout(timeout);
 		const msg = e instanceof Error ? e.message : String(e);
-		// If onReturn was never called, resolve with error
 		return {
 			valBpb: Infinity,
 			totalSteps: lastStep,
@@ -102,8 +108,7 @@ export async function executeTrainCode(
 			seqLen: 128,
 			error: msg,
 		};
+	} finally {
+		clearTimeout(timer);
 	}
-	clearTimeout(timeout);
-
-	return promise;
 }

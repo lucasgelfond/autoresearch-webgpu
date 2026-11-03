@@ -1,0 +1,2 @@
+# Unused ONNX Runtime fallback (>25 MiB Workers limit); Transformers.js loads it from jsDelivr
+_app/immutable/assets/ort-wasm-*.wasm
