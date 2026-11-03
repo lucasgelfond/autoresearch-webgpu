@@ -14,7 +14,6 @@ export type ExperimentRecord = {
 
 /**
  * System prompt with jax-js API reference.
- * This is large (~3k tokens) and should be cached via Anthropic prompt caching.
  */
 export function buildSystemPrompt(): string {
 	return `You are an autonomous ML researcher. You write training code that runs in the browser using WebGPU via jax-js.
@@ -27,6 +26,7 @@ Your goal: minimize validation bits-per-byte (val_bpb). Lower is better.
 - Training budget: ~30 seconds wall-clock time. Aim for fast training steps.
 - Practical limit: ~300K parameters. Bigger models = fewer steps in the budget, which often hurts.
 - The sweet spot is small, fast models that get many training steps in 30 seconds.
+- nEmbd must be divisible by nHead so the head dimension is an integer.
 
 ## Your code receives these globals
 
@@ -126,6 +126,6 @@ export function buildUserPrompt(
 		msg += '\n';
 	}
 
-	msg += `\nPropose the next experiment. Respond with ONLY the JSON object.`;
+	msg += `\nPropose the next experiment. Do not repeat an experiment from the history. Respond with ONLY the JSON object.`;
 	return msg;
 }

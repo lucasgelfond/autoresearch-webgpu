@@ -35,7 +35,7 @@
 			{#if exp.id === -1}
 				<span class="shrink-0 w-3 text-center text-red-400 animate-pulse" title="in progress">*</span>
 			{:else}
-				<span class="shrink-0 w-3 text-center {exp.source === 'auto' ? 'text-blue-400' : 'text-gray-500'}" title={exp.source === 'auto' ? 'auto (Claude)' : 'manual'}>
+				<span class="shrink-0 w-3 text-center {exp.source === 'auto' ? 'text-blue-400' : 'text-gray-500'}" title={exp.source === 'auto' ? 'auto (model)' : 'manual'}>
 					{exp.source === 'auto' ? 'A' : 'M'}
 				</span>
 			{/if}

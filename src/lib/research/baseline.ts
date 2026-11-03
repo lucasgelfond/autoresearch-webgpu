@@ -1,6 +1,6 @@
 /**
  * The baseline training code — equivalent to the initial train.py.
- * This is what runs on the first experiment before Claude starts iterating.
+ * This is what runs on the first experiment before the model starts iterating.
  */
 export const BASELINE_CODE = `// GPT model — byte-level transformer
 const nLayer = 3, nEmbd = 96, nHead = 4, mlpRatio = 4;
