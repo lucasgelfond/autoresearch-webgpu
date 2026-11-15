@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { t } from '$lib/i18n';
 	import type { ExperimentRecord } from '$lib/research/prompt';
 
 	let {
@@ -33,9 +34,9 @@
 				{exp.id === -1 ? 'bg-red-950/50 text-red-300' : selected?.id === exp.id ? 'bg-blue-950/50 text-blue-300' : exp.id === bestId ? 'bg-green-950/50 text-green-300' : 'text-gray-400 hover:bg-gray-800'}"
 		>
 			{#if exp.id === -1}
-				<span class="shrink-0 w-3 text-center text-red-400 animate-pulse" title="in progress">*</span>
+				<span class="shrink-0 w-3 text-center text-red-400 animate-pulse" title={t.list.inProgress}>*</span>
 			{:else}
-				<span class="shrink-0 w-3 text-center {exp.source === 'auto' ? 'text-blue-400' : 'text-gray-500'}" title={exp.source === 'auto' ? 'auto (Claude)' : 'manual'}>
+				<span class="shrink-0 w-3 text-center {exp.source === 'auto' ? 'text-blue-400' : 'text-gray-500'}" title={exp.source === 'auto' ? t.list.sourceAuto : t.list.sourceManual}>
 					{exp.source === 'auto' ? 'A' : 'M'}
 				</span>
 			{/if}
@@ -47,6 +48,6 @@
 	{/each}
 
 	{#if experiments.length === 0}
-		<p class="text-gray-500 text-xs font-mono px-2">no experiments yet</p>
+		<p class="text-gray-500 text-xs font-mono px-2">{t.list.empty}</p>
 	{/if}
 </div>

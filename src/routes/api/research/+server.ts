@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit';
 import { dev } from '$app/environment';
 import type { RequestHandler } from './$types';
 import { parseClaudeResponse } from '$lib/research/parse';
+import { t } from '$lib/i18n';
 
 const ALLOWED_ORIGIN = 'https://autoresearch.lucasgelfond.online';
 
@@ -9,20 +10,20 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 	if (!dev) {
 		const origin = request.headers.get('origin');
 		if (origin !== ALLOWED_ORIGIN) {
-			return json({ error: 'Forbidden' }, { status: 403 });
+			return json({ error: t.errors.server.forbidden }, { status: 403 });
 		}
 	}
 
 	const apiKey = platform?.env?.ANTHROPIC_API_KEY;
 	if (!apiKey) {
-		return json({ error: 'API key not configured' }, { status: 500 });
+		return json({ error: t.errors.server.apiKeyMissing }, { status: 500 });
 	}
 
 	const rateLimiter = platform?.env?.RATE_LIMITER;
 	if (rateLimiter) {
 		const { success } = await rateLimiter.limit({ key: 'global' });
 		if (!success) {
-			return json({ error: 'Rate limited. Max 1 request every 10 seconds.' }, { status: 429 });
+			return json({ error: t.errors.server.rateLimited }, { status: 429 });
 		}
 	}
 
@@ -87,5 +88,5 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 	const parsed = parseClaudeResponse(text);
 	if (parsed) return json(parsed);
 
-	return json({ error: 'Could not parse response', raw: text.slice(0, 500) }, { status: 422 });
+	return json({ error: t.errors.server.cannotParse, raw: text.slice(0, 500) }, { status: 422 });
 };

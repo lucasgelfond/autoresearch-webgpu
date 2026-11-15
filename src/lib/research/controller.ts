@@ -7,6 +7,7 @@ import { saveWeights } from '../weights';
 import { buildSystemPrompt, buildUserPrompt, type ExperimentRecord } from './prompt';
 import { BASELINE_CODE } from './baseline';
 import { parseClaudeResponse } from './parse';
+import { t } from '../i18n';
 
 export type ResearchCallbacks = {
 	onExperimentStart?: (code: string, reasoning: string) => void;
@@ -49,7 +50,7 @@ export class ResearchController {
 		if (this.history.length === 0) {
 			await this.runExperiment(
 				this.bestCode,
-				'Baseline run with default architecture.',
+				t.reasoning.baseline,
 				trainData, valData, callbacks
 			);
 		}
@@ -57,7 +58,7 @@ export class ResearchController {
 		while (!this.stopRequested) {
 			const proposal = await this.getNextCode(callbacks);
 			if (!proposal) {
-				callbacks.onError?.(this.lastError || 'Failed to get next code from Claude.');
+				callbacks.onError?.(this.lastError || t.errors.noNextCode);
 				break;
 			}
 			await this.runExperiment(
@@ -155,21 +156,21 @@ export class ResearchController {
 
 			if (!response.ok) {
 				const err = await response.text();
-				this.lastError = `API ${response.status}: ${err.slice(0, 200)}`;
+				this.lastError = t.errors.api(response.status, err.slice(0, 200));
 				return null;
 			}
 
 			// Parse SSE stream from Anthropic
 			const fullText = await this.consumeStream(response, callbacks);
 			if (!fullText) {
-				this.lastError = 'Empty response from Claude';
+				this.lastError = t.errors.emptyResponse;
 				return null;
 			}
 
 			return this.parseResponse(fullText);
 		} catch (e) {
 			if (this.stopRequested) return null;
-			this.lastError = `Fetch failed: ${e}`;
+			this.lastError = t.errors.fetchFailed(e);
 			return null;
 		} finally {
 			this.fetchAbort = null;
@@ -269,7 +270,7 @@ export class ResearchController {
 
 	private parseResponse(text: string): { code: string; reasoning: string } | null {
 		const result = parseClaudeResponse(text);
-		if (!result) this.lastError = 'Could not parse Claude response';
+		if (!result) this.lastError = t.errors.parseFailed;
 		return result;
 	}
 }

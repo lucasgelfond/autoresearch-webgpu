@@ -1,12 +1,14 @@
 # autoresearch-webgpu
 
-Browser port of [Karpathy's autoresearch](https://github.com/karpathy/autoresearch)! autoresearch-webgpu:
-- uses a language model to create a `train.ts` file, with a basic model training loop
-- runs model training in the browser, using the device GPU (powered by `jax-js`, thanks [@ekzhang](https://github.com/ekzhang)!)
-- evaluates the loss / results of the experiments, and feeds them back to an agent to generate new code! 
+Portage navigateur de [l'autoresearch de Karpathy](https://github.com/karpathy/autoresearch) ! autoresearch-webgpu :
+- utilise un modèle de langage pour créer un fichier `train.ts`, avec une boucle d'entraînement de base
+- exécute l'entraînement du modèle dans le navigateur, sur le GPU de l'appareil (grâce à `jax-js`, merci [@ekzhang](https://github.com/ekzhang) !)
+- évalue la perte et les résultats des expériences, puis les renvoie à un agent pour générer du nouveau code !
 
-There's noting else particularly crazy about this repo - it's a standard Svelte app, using [pglite](https://pglite.dev/) (probably overkill!) to keep track of experiment state. I was mostly just curious to try this out (+ send to others) and didn't want to do the Python install! 
+Rien de bien extravagant dans ce dépôt : c'est une application Svelte classique, qui utilise [pglite](https://pglite.dev/) (sans doute overkill !) pour suivre l'état des expériences. Je voulais surtout tester cette idée (et la partager), sans passer par l'installation de Python !
+
+L'interface est entièrement en français ; tous les textes affichés sont centralisés dans [`src/lib/i18n/fr.ts`](src/lib/i18n/fr.ts).
 
 ![demo](static/demo.gif)
 
-Try the live demo at [autoresearch.lucasgelfond.online](https://autoresearch.lucasgelfond.online)
+Essayez la démo en ligne sur [autoresearch.lucasgelfond.online](https://autoresearch.lucasgelfond.online)

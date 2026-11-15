@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { t } from '$lib/i18n';
+
 	type Point = { step: number; loss: number };
 	type Series = { data: Point[]; color: string; label?: string; highlight?: boolean };
 
@@ -116,7 +118,7 @@
 		// Axis label
 		ctx.fillStyle = '#6b7280';
 		ctx.textAlign = 'center';
-		ctx.fillText('step', pad.left + plotW / 2, h - 3);
+		ctx.fillText(t.chart.xAxis, pad.left + plotW / 2, h - 3);
 
 		// Draw non-highlighted series first, then highlighted on top
 		const sorted = [...allSeries].sort((a, b) => (a.highlight ? 1 : 0) - (b.highlight ? 1 : 0));
@@ -143,7 +145,7 @@
 <div class="relative w-full h-full">
 	{#if data.length < 2 && pastRuns.length === 0}
 		<div class="absolute inset-0 flex items-center justify-center text-gray-500 text-sm font-mono">
-			waiting for data...
+			{t.chart.waiting}
 		</div>
 	{/if}
 	<canvas bind:this={canvas} class="w-full h-full"></canvas>

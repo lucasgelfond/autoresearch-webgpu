@@ -4,6 +4,7 @@
 
 import { getPrepareGlobals, type Params, type ForwardFn, type StepMetrics, type TrainResult } from '../prepare';
 import { DataLoader } from '../data/loader';
+import { t } from '../i18n';
 
 export type RunResult = {
 	valBpb: number;
@@ -58,7 +59,7 @@ export async function executeTrainCode(
 	// Timeout: 2x the training budget (minimum 30s for model init/inference rebuild)
 	const timeoutMs = Math.max(trainSeconds * 2000, 30000);
 	const timeout = setTimeout(() => {
-		if (!resolved) reject(new Error(`Training exceeded ${timeoutMs / 1000}s timeout`));
+		if (!resolved) reject(new Error(t.errors.timeout(timeoutMs / 1000)));
 	}, timeoutMs);
 
 	try {

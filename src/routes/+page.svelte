@@ -18,12 +18,16 @@
 	import CodeEditor from '$lib/components/CodeEditor.svelte';
 	import Leaderboard from '$lib/components/Leaderboard.svelte';
 	import { petname } from '$lib/petname';
+	import { t } from '$lib/i18n';
+
+	type Phase = 'initializing' | 'loading-data' | 'ready' | 'error';
 
 	let gpuStatus = $state<WebGPUStatus | null>(null);
 	let code = $state(BASELINE_CODE);
 	let running = $state(false);
 	let lossData = $state<{ step: number; loss: number }[]>([]);
-	let status = $state<string>('initializing');
+	let phase = $state<Phase>('initializing');
+	let status = $state<string>('');
 	let sampling = $state(false);
 	let mode = $state<'manual' | 'research'>('research');
 	let experiments = $state<ExperimentRecord[]>([]);
@@ -67,11 +71,11 @@
 
 	onMount(async () => {
 		try {
-			status = 'initializing';
+			phase = 'initializing';
 			await getDb();
 			gpuStatus = await initWebGPU();
-			if (!gpuStatus.ok) { status = 'error'; return; }
-			status = 'loading data...';
+			if (!gpuStatus.ok) { phase = 'error'; return; }
+			phase = 'loading-data';
 			[trainLoader, valLoader] = await Promise.all([
 				DataLoader.fetch('/data/train.bin'),
 				DataLoader.fetch('/data/val.bin')
@@ -84,10 +88,10 @@
 				const exp = experiments.find(e => e.id === id);
 				if (exp) selectExperiment(exp);
 			}
-			status = 'ready';
+			phase = 'ready';
 		} catch (e) {
 			console.error('Init failed:', e);
-			status = 'error';
+			phase = 'error';
 		}
 	});
 
@@ -106,7 +110,7 @@
 		lossData = [];
 		inferences = [];
 		inferenceIdx = 0;
-		status = 'training...';
+		status = t.status.training;
 		currentRunName = experimentName || petname();
 		currentReasoning = '';
 		trainAbort = new AbortController();
@@ -123,7 +127,7 @@
 			signal: trainAbort.signal,
 			onStep(m: StepMetrics) {
 				lossData = [...lossData, { step: m.step, loss: m.loss }];
-				status = `step ${m.step} | loss ${m.loss.toFixed(4)} | ${(m.elapsed / 1000).toFixed(1)}s`;
+				status = t.status.step(m.step, m.loss.toFixed(4), (m.elapsed / 1000).toFixed(1));
 				if (inProgressExp) {
 					inProgressExp = { ...inProgressExp, valBpb: m.loss, totalSteps: m.step, elapsed: m.elapsed };
 				}
@@ -150,7 +154,7 @@
 			valBpb: result.valBpb,
 			elapsed: result.elapsed,
 			totalSteps: result.totalSteps,
-			reasoning: result.error || 'Manual run',
+			reasoning: result.error || t.reasoning.manualRun,
 			kept,
 			lossCurve: lossData,
 			error: result.error,
@@ -161,8 +165,8 @@
 		await loadFromDb();
 		selectExperimentById(dbId);
 		status = result.error
-			? `error: ${result.error}`
-			: `done — val_bpb: ${result.valBpb.toFixed(4)} | ${result.totalSteps} steps`;
+			? t.status.error(result.error)
+			: t.status.done(result.valBpb.toFixed(4), result.totalSteps);
 		running = false;
 		experimentName = petname();
 
@@ -194,7 +198,7 @@
 		running = true;
 		waitingForRecommendation = true;
 		lossData = [];
-		status = 'starting...';
+		status = t.status.starting;
 		controller = new ResearchController();
 		setListMode('current');
 
@@ -212,7 +216,7 @@
 				code = expCode;
 				currentReasoning = reasoning;
 				currentRunName = petname();
-				status = `experiment: ${reasoning}`;
+				status = t.status.experiment(reasoning);
 				if (listMode === 'current') setSelectedExp(null);
 				inProgressExp = {
 					id: -1, name: currentRunName, source: 'auto', code: expCode,
@@ -233,17 +237,17 @@
 				if (record.kept && controller) {
 					code = controller.bestCode;
 				}
-				status = `#${record.id} ${record.kept ? 'KEPT' : 'discarded'} — bpb ${record.valBpb.toFixed(4)}`;
+				status = t.status.experimentDone(record.id, record.kept, record.valBpb.toFixed(4));
 			},
 			onCodeStream(streamedCode) {
 				code = streamedCode;
 			},
 			onReasoningStream(streamedReasoning) {
 				currentReasoning = streamedReasoning;
-				status = `thinking: ${streamedReasoning}`;
+				status = t.status.thinking(streamedReasoning);
 			},
 			onError(error) {
-				status = `error: ${error}`;
+				status = t.status.error(error);
 			}
 		});
 
@@ -325,15 +329,15 @@
 		sampling = true;
 		try {
 			if (!loadedModel || loadedModel.expId !== selectedExpId) {
-				status = 'loading model...';
+				status = t.status.loadingModel;
 				const loaded = await loadModelForExperiment(selectedExpId);
 				if (!loaded) {
 					console.error('Could not load model for experiment', selectedExpId);
 					sampling = false;
-					status = 'ready';
+					status = t.status.ready;
 					return;
 				}
-				status = 'ready';
+				status = t.status.ready;
 			}
 			streamingOutput = '';
 			const output = await sampleText(loadedModel!.params, loadedModel!.forward, loadedModel!.vocabSize, loadedModel!.seqLen, prompt, 200, temperature, (text) => {
@@ -376,26 +380,34 @@
 	let currentInference = $derived(inferences.length > 0 ? inferences[inferenceIdx] : null);
 	let selectedExp = $derived(selectedExpId ? experiments.find(e => e.id === selectedExpId) ?? null : null);
 	let hasAnyModel = $derived(experiments.length > 0 || running);
-	let isFirstLoad = $derived(experiments.length === 0 && !running && status !== 'error');
+	let isFirstLoad = $derived(experiments.length === 0 && !running && phase !== 'error');
+	let phaseLabel = $derived(
+		phase === 'initializing'
+			? t.status.initializing
+			: phase === 'loading-data'
+				? t.status.loadingData
+				: t.status.ready
+	);
 </script>
 
 <svelte:head>
-	<title>autoresearch, in the browser!</title>
-	<meta name="description" content="Train small language models in your browser using WebGPU. Claude writes the training code, runs experiments, and iterates — a model training another model!" />
-	<meta property="og:title" content="autoresearch, in the browser!" />
-	<meta property="og:description" content="Train small language models in your browser using WebGPU. Claude writes the training code, runs experiments, and iterates." />
+	<title>{t.meta.title}</title>
+	<meta name="description" content={t.meta.description} />
+	<meta property="og:title" content={t.meta.title} />
+	<meta property="og:description" content={t.meta.ogDescription} />
 	<meta property="og:image" content="https://autoresearch.lucasgelfond.online/demo.gif" />
 	<meta property="og:type" content="website" />
+	<meta property="og:locale" content="fr_FR" />
 	<meta name="twitter:card" content="summary_large_image" />
-	<meta name="twitter:title" content="autoresearch, in the browser!" />
-	<meta name="twitter:description" content="Train small language models in your browser using WebGPU. Claude writes the training code and iterates." />
+	<meta name="twitter:title" content={t.meta.title} />
+	<meta name="twitter:description" content={t.meta.twitterDescription} />
 	<meta name="twitter:image" content="https://autoresearch.lucasgelfond.online/demo.gif" />
 </svelte:head>
 
 <main class="px-6 py-12 max-w-6xl mx-auto space-y-5">
 	<!-- Mobile warning -->
 	<div class="md:hidden rounded border-2 border-red-600 bg-red-950 p-4 font-mono text-sm text-red-300 text-center leading-relaxed">
-		<span class="font-bold text-red-400">WARNING:</span> mobile devices often crash with memory intensive web activities. best results on a proper computer!
+		<span class="font-bold text-red-400">{t.mobileWarning.label}</span> {t.mobileWarning.text}
 	</div>
 
 	{#if gpuStatus && !gpuStatus.ok}
@@ -404,32 +416,32 @@
 		</div>
 	{:else}
 		<div class="max-w-xl space-y-3">
-			<h1 class="text-lg font-mono font-bold text-white">autoresearch, in the browser!</h1>
+			<h1 class="text-lg font-mono font-bold text-white">{t.header.title}</h1>
 			<p class="text-xs font-mono text-gray-300 leading-relaxed">
-				Train a small language model (all on device, with WebGPU!) by generating training code, running experiments, and iterating on progress.
+				{t.header.tagline}
 			</p>
 			<p class="text-[10px] font-mono text-gray-500 leading-relaxed">
-				Based on Andrej Karpathy's <a href="https://github.com/karpathy/autoresearch" class="underline hover:text-gray-200">autoresearch</a> and built on <a href="https://www.ekzhang.com/" class="underline hover:text-gray-200">Eric Zhang</a>'s <a href="https://github.com/ekzhang/jax-js" class="underline hover:text-gray-200">jax-js</a>. Built by <a href="https://lucasgelfond.online" class="underline hover:text-gray-200">Lucas Gelfond</a>. Source <a href="https://github.com/lucasgelfond/autoresearch-webgpu" class="underline hover:text-gray-200">here</a>.
+				{t.header.credits.beforeAutoresearch}<a href="https://github.com/karpathy/autoresearch" class="underline hover:text-gray-200">{t.header.credits.autoresearch}</a>{t.header.credits.afterAutoresearch}<a href="https://github.com/ekzhang/jax-js" class="underline hover:text-gray-200">{t.header.credits.jaxJs}</a>{t.header.credits.afterJaxJs}<a href="https://www.ekzhang.com/" class="underline hover:text-gray-200">Eric Zhang</a>{t.header.credits.afterAuthor}<a href="https://lucasgelfond.online" class="underline hover:text-gray-200">{t.header.credits.author}</a>{t.header.credits.beforeSource}<a href="https://github.com/lucasgelfond/autoresearch-webgpu" class="underline hover:text-gray-200">{t.header.credits.source}</a>{t.header.credits.afterSource}
 			</p>
 		</div>
-		{#if status === 'error'}
+		{#if phase === 'error'}
 			<div class="rounded border border-red-800 bg-red-950 p-4 font-mono text-sm text-red-400 mt-4">
-				something went wrong during initialization. check the console for details.
+				{t.initError}
 			</div>
 		{:else if isFirstLoad}
 		<div class="flex flex-col items-center justify-center space-y-6 mx-auto" style="min-height: calc(100vh - 14rem);">
-			{#if status === 'ready'}
+			{#if phase === 'ready'}
 				<button
 					onclick={() => { mode = 'research'; startResearch(); }}
 					class="rounded-lg bg-blue-600 hover:bg-blue-500 px-8 py-4 font-mono text-sm text-white transition-colors"
 				>
-					start research
+					{t.firstRun.start}
 				</button>
 				<p class="text-xs font-mono text-gray-500 max-w-sm text-center">
-					Claude will write training code, run it in your browser, and iterate to find better models.
+					{t.firstRun.hint}
 				</p>
 			{:else}
-				<p class="text-sm font-mono text-gray-500">{status === 'initializing' ? 'initializing...' : status}</p>
+				<p class="text-sm font-mono text-gray-500">{phaseLabel}</p>
 			{/if}
 		</div>
 		{:else}
@@ -439,12 +451,12 @@
 					class="px-2.5 py-0.5 {mode === 'manual' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-white'}"
 					onclick={() => (mode = 'manual')}
 					disabled={running}
-				>manual</button>
+				>{t.mode.manual}</button>
 				<button
 					class="px-2.5 py-0.5 {mode === 'research' ? 'bg-blue-700 text-white' : 'text-gray-400 hover:text-white'}"
 					onclick={() => (mode = 'research')}
 					disabled={running}
-				>auto</button>
+				>{t.mode.research}</button>
 			</div>
 		</div>
 
@@ -453,12 +465,12 @@
 			<div class="flex flex-col md:h-full md:overflow-hidden">
 				<div class="flex flex-col flex-1 min-h-0">
 					<div class="flex items-center justify-between mb-2 shrink-0">
-						<h2 class="text-xs font-mono text-gray-400">train.ts</h2>
+						<h2 class="text-xs font-mono text-gray-400">{t.train.heading}</h2>
 						<button
 							onclick={() => (code = BASELINE_CODE)}
 							disabled={running}
 							class="text-gray-500 hover:text-gray-300 disabled:opacity-30 text-[10px] font-mono"
-						>reset</button>
+						>{t.train.reset}</button>
 					</div>
 					<div class="flex-1 min-h-0">
 						<CodeEditor bind:value={code} disabled={running && mode === 'research'} />
@@ -469,33 +481,33 @@
 						<input
 							type="text"
 							bind:value={experimentName}
-							placeholder="experiment name..."
+							placeholder={t.train.namePlaceholder}
 							disabled={running}
 							class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 font-mono text-xs text-gray-200 placeholder-gray-500 disabled:opacity-40"
 						/>
 						{#if running}
 							<button onclick={stopCurrentRun}
 								class="w-full rounded bg-red-600 hover:bg-red-500 px-3 py-1.5 font-mono text-xs transition-colors">
-								stop training
+								{t.train.stopTraining}
 							</button>
 						{:else}
 							<button onclick={startManualTraining}
-								disabled={status === 'loading data...'}
+								disabled={phase !== 'ready'}
 								class="w-full rounded bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 px-3 py-1.5 font-mono text-xs transition-colors">
-								run train.ts
+								{t.train.run}
 							</button>
 						{/if}
 					{:else}
 						{#if !running}
 							<button onclick={startResearch}
-								disabled={status === 'loading data...'}
+								disabled={phase !== 'ready'}
 								class="w-full rounded bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 px-3 py-1.5 font-mono text-xs transition-colors">
-								start research
+								{t.train.startResearch}
 							</button>
 						{:else}
 							<button onclick={stopCurrentRun}
 								class="w-full rounded bg-red-600 hover:bg-red-500 px-3 py-1.5 font-mono text-xs transition-colors">
-								stop
+								{t.train.stop}
 							</button>
 						{/if}
 					{/if}
@@ -508,7 +520,7 @@
 					{#if selectedExp}
 						<div class="flex items-center gap-2 font-mono text-xs">
 							<span class="px-1 py-0.5 rounded text-[10px] {selectedExp.source === 'auto' ? 'bg-blue-900/50 text-blue-300' : 'bg-gray-700 text-gray-300'}">
-								{selectedExp.source === 'auto' ? 'auto' : 'manual'}
+								{selectedExp.source === 'auto' ? t.experiment.sourceAuto : t.experiment.sourceManual}
 							</span>
 							<span class="text-gray-200">{selectedExp.name}</span>
 							<span class="text-gray-500 tabular-nums ml-auto">{selectedExp.valBpb.toFixed(4)} bpb</span>
@@ -517,15 +529,15 @@
 							<p class="text-[11px] text-gray-400 font-mono line-clamp-2" title={selectedExp.reasoning}>{selectedExp.reasoning}</p>
 						{/if}
 						{#if selectedExp.error}
-							<p class="text-[11px] text-red-400 font-mono line-clamp-2">error: {selectedExp.error}</p>
+							<p class="text-[11px] text-red-400 font-mono line-clamp-2">{t.experiment.error}&nbsp;: {selectedExp.error}</p>
 						{/if}
 					{:else if running}
 						<div class="flex items-center gap-2 font-mono text-xs">
 							<span class="px-1 py-0.5 rounded text-[10px] bg-blue-900/50 text-blue-300 animate-pulse">
-								{waitingForRecommendation ? 'thinking' : 'running'}
+								{waitingForRecommendation ? t.run.thinking : t.run.running}
 							</span>
 							<span class="text-gray-200">
-								{waitingForRecommendation ? 'Claude writing code...' : currentRunName || 'training...'}
+								{waitingForRecommendation ? t.run.writingCode : currentRunName || t.run.training}
 							</span>
 						</div>
 						{#if currentReasoning && !waitingForRecommendation}
@@ -533,7 +545,7 @@
 						{/if}
 						<p class="text-[11px] text-gray-500 font-mono">{status}</p>
 					{:else}
-						<h2 class="text-xs font-mono text-gray-400">loss</h2>
+						<h2 class="text-xs font-mono text-gray-400">{t.chart.heading}</h2>
 					{/if}
 					<div class="h-44 shrink-0">
 						<LossChart data={lossData} pastRuns={pastLossRuns} />
@@ -542,12 +554,12 @@
 					<!-- Inference -->
 					{#if hasAnyModel}
 					<div class="border-t border-gray-800 pt-2 flex flex-col min-h-0 flex-1 gap-1.5">
-						<h2 class="text-xs font-mono text-gray-400 shrink-0">inference</h2>
+						<h2 class="text-xs font-mono text-gray-400 shrink-0">{t.inference.heading}</h2>
 						<div class="flex items-center gap-2 shrink-0">
 							<input
 								type="text"
 								bind:value={prompt}
-								placeholder="prompt..."
+								placeholder={t.inference.promptPlaceholder}
 								disabled={!selectedExpId || sampling}
 								class="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 font-mono text-xs text-gray-200 placeholder-gray-500 disabled:opacity-40"
 								onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter') generateSample(); }}
@@ -555,8 +567,10 @@
 							<input type="number" bind:value={temperature} min={0.1} max={2} step={0.1}
 								disabled={!selectedExpId || sampling}
 								class="w-12 bg-gray-800 border border-gray-700 rounded px-1 py-1 text-right tabular-nums text-xs text-gray-200 font-mono disabled:opacity-40"
-								title="temperature" />
+								title={t.inference.temperature}
+								aria-label={t.inference.temperature} />
 							<button onclick={generateSample} disabled={!selectedExpId || sampling}
+								aria-label={sampling ? t.inference.generating : t.inference.go}
 								class="rounded bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 px-3 py-1 font-mono text-xs transition-colors">
 								{#if sampling}
 									<svg class="animate-spin h-3.5 w-3.5 text-gray-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -564,7 +578,7 @@
 										<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
 									</svg>
 								{:else}
-									go
+									{t.inference.go}
 								{/if}
 							</button>
 						</div>
@@ -576,9 +590,11 @@
 									<div class="flex items-center justify-end text-xs font-mono text-gray-500 mb-1">
 										<div class="flex items-center gap-1">
 											<button onclick={() => { inferenceIdx = Math.min(inferenceIdx + 1, inferences.length - 1); }}
+												aria-label={t.inference.older}
 												disabled={inferenceIdx >= inferences.length - 1} class="px-1 hover:text-gray-300 disabled:opacity-30">←</button>
 											<span>{inferences.length - inferenceIdx}/{inferences.length}</span>
 											<button onclick={() => { inferenceIdx = Math.max(inferenceIdx - 1, 0); }}
+												aria-label={t.inference.newer}
 												disabled={inferenceIdx <= 0} class="px-1 hover:text-gray-300 disabled:opacity-30">→</button>
 										</div>
 									</div>
@@ -597,10 +613,10 @@
 					<div class="flex items-center justify-between mb-2 shrink-0">
 						<div class="flex items-center gap-1 text-xs font-mono">
 							<button class="{listMode === 'leaderboard' ? 'text-gray-200' : 'text-gray-500 hover:text-gray-300'}"
-								onclick={() => setListMode('leaderboard')}>leaderboard</button>
+								onclick={() => setListMode('leaderboard')}>{t.list.leaderboard}</button>
 							<span class="text-gray-600">/</span>
 							<button class="{listMode === 'current' ? 'text-gray-200' : 'text-gray-500 hover:text-gray-300'}"
-								onclick={() => setListMode('current')}>history</button>
+								onclick={() => setListMode('current')}>{t.list.history}</button>
 						</div>
 						<span class="text-gray-500 text-[10px] font-mono">{experiments.length}</span>
 					</div>
@@ -611,8 +627,8 @@
 					</div>
 					{#if experiments.length > 0}
 						<div class="flex gap-3 mt-2 pt-2 border-t border-gray-800 shrink-0">
-							<button onclick={handleExport} class="text-gray-500 hover:text-gray-300 text-xs font-mono">export</button>
-							<button onclick={handleClear} disabled={running} class="text-gray-500 hover:text-red-400 text-xs font-mono">clear</button>
+							<button onclick={handleExport} class="text-gray-500 hover:text-gray-300 text-xs font-mono">{t.list.export}</button>
+							<button onclick={handleClear} disabled={running} class="text-gray-500 hover:text-red-400 text-xs font-mono">{t.list.clear}</button>
 						</div>
 					{/if}
 				</div>
@@ -624,11 +640,11 @@
 	{#if showClearModal}
 		<div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
 			<div class="bg-gray-900 border border-gray-700 rounded-lg p-6 max-w-sm space-y-4 font-mono">
-				<h3 class="text-sm text-gray-200">clear all data?</h3>
-				<p class="text-xs text-gray-400">this will delete all experiments, loss curves, inferences, and saved weights. this cannot be undone.</p>
+				<h3 class="text-sm text-gray-200">{t.clear.title}</h3>
+				<p class="text-xs text-gray-400">{t.clear.body}</p>
 				<div class="flex gap-2 justify-end">
-					<button onclick={() => (showClearModal = false)} class="px-3 py-1.5 rounded bg-gray-800 text-gray-300 hover:bg-gray-700 text-sm">cancel</button>
-					<button onclick={confirmClear} class="px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-500 text-sm">clear everything</button>
+					<button onclick={() => (showClearModal = false)} class="px-3 py-1.5 rounded bg-gray-800 text-gray-300 hover:bg-gray-700 text-sm">{t.clear.cancel}</button>
+					<button onclick={confirmClear} class="px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-500 text-sm">{t.clear.confirm}</button>
 				</div>
 			</div>
 		</div>
